@@ -1,0 +1,29 @@
+# Ambientes e artefatos de compilação
+.venv/
+.venv_backup_*/
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.spec
+*.egg-info/
+
+# Dados locais e logs (podem conter dados privados)
+Runtime/
+downloads/
+*.log
+diagnostico_completo.txt
+instalado-v*.json
+
+# Gravações
+*.mp4
+*.mkv
+*.wav
+*.mov
+*.avi
+
+# Metadados locais
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

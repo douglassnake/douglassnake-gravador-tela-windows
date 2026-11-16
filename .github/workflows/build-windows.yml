@@ -1,0 +1,51 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+
+      - name: Verificar sintaxe
+        shell: pwsh
+        run: python -m compileall -q gravador_tela.py preparar_ambiente.py verificar_python.py
+
+      - name: Instalar dependências
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt 'pyinstaller>=6,<7'
+
+      - name: Compilar executável
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name GravadorTelaWin --collect-all imageio_ffmpeg --collect-all soundcard --collect-all comtypes --hidden-import comtypes --hidden-import comtypes.client gravador_tela.py
+
+      - name: Validar artefato
+        shell: pwsh
+        run: |
+          if (!(Test-Path 'dist/GravadorTelaWin.exe')) { throw 'Executável não encontrado' }
+          Get-Item 'dist/GravadorTelaWin.exe' | Select-Object Name, Length
+          Get-FileHash 'dist/GravadorTelaWin.exe' -Algorithm SHA256
+
+      - name: Disponibilizar EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: GravadorTelaWin-Windows-x64
+          path: dist/GravadorTelaWin.exe
+          if-no-files-found: error

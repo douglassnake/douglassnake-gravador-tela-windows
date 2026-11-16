@@ -40,10 +40,10 @@ Também existe uma rotina em **GitHub Actions**: na aba **Actions**, execute `Bu
 
 O projeto inclui dois assistentes para Windows:
 
-1. **`PUBLICAR_GITHUB.bat`**: prepara uma cópia local somente com arquivos aprovados, usa o GitHub CLI (`gh`) e publica o projeto no repositório **público** `douglassnake/gravador-tela-windows`. Exige **Git**, **GitHub CLI** e autenticação na conta `douglassnake` pelo navegador. Se faltarem ferramentas, o script indica como instalá-las. Não salva tokens nem incorpora vídeos e logs ao repositório.
+1. **`PUBLICAR_GITHUB.bat`**: prepara uma cópia local somente com arquivos aprovados, usa o GitHub CLI (`gh`) e publica o projeto no repositório **público** `douglassnake/douglassnake-gravador-tela-windows`. Exige **Git**, **GitHub CLI** e autenticação na conta `douglassnake` pelo navegador. Se faltarem ferramentas, o script indica como instalá-las. Não salva tokens nem incorpora vídeos e logs ao repositório.
 2. **`ABRIR_PUBLICACAO_X.bat`**: depois que o README estiver acessível no GitHub, abre a tela de publicação do X.com com um texto pronto. **O post não é enviado automaticamente**; revise e clique em Publicar no X.
 
-Caso prefira o método manual, crie um repositório público e vazio em [GitHub / new](https://github.com/new) com o nome `gravador-tela-windows`, instale [GitHub CLI](https://cli.github.com/) e use o `PUBLICAR_GITHUB.bat` para enviar os arquivos. O script protege repositórios que já possuam um histórico diferente.
+O repositório oficial já está disponível em [GitHub](https://github.com/douglassnake/douglassnake-gravador-tela-windows). O script de publicação por GitHub CLI é opcional; para futuras atualizações, use uma cópia clonada do repositório, preservando o histórico existente.
 
 Não publique o link do GitHub nem divulgue um `.exe` antes de confirmar que o repositório e a compilação estão disponíveis. O **GitHub Actions** disponibiliza o executável como artefato; ele não é automaticamente um instalador assinado ou uma Release.
 

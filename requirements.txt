@@ -1,0 +1,6 @@
+imageio-ffmpeg>=0.5.1,<1
+mss>=10.0,<12
+numpy>=1.26,<3
+Pillow>=11.0,<13
+SoundCard>=0.4.4,<1
+comtypes>=1.4,<2; sys_platform == "win32"
