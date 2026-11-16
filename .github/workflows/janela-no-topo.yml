@@ -1,0 +1,49 @@
+name: Empacotar Janela no Topo (Windows)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'janela-no-topo/**'
+      - '.github/workflows/janela-no-topo.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pacote-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validar sintaxe do PowerShell
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'janela-no-topo/JanelaNoTopo.ps1').Path,
+            [ref]$tokens, [ref]$errors
+          )
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          Write-Output 'Sintaxe do PowerShell valida.'
+
+      - name: Preparar pacote portatil
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path 'dist/JanelaNoTopo' | Out-Null
+          Copy-Item 'janela-no-topo/INICIAR.bat','janela-no-topo/CRIAR_ATALHO.bat','janela-no-topo/JanelaNoTopo.ps1','janela-no-topo/README.md','janela-no-topo/README.txt' -Destination 'dist/JanelaNoTopo/'
+          Compress-Archive -Path 'dist/JanelaNoTopo' -DestinationPath 'dist/JanelaNoTopo-v1.0-Windows.zip' -Force
+          if (-not (Test-Path 'dist/JanelaNoTopo-v1.0-Windows.zip')) { throw 'Pacote ZIP nao foi criado' }
+
+      - name: Disponibilizar download
+        uses: actions/upload-artifact@v4
+        with:
+          name: JanelaNoTopo-Windows
+          path: dist/JanelaNoTopo-v1.0-Windows.zip
+          retention-days: 30
+          if-no-files-found: error

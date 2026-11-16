@@ -1,4 +1,14 @@
-# GravadorTelaWin — gravador de tela para Windows
+# Aplicativos Windows — GravadorTelaWin e Janela no Topo
+
+Este repositório reúne dois aplicativos independentes para Windows 10/11.
+
+## Janela no Topo v1.0
+
+O [**Janela no Topo**](janela-no-topo/README.md) permite selecionar uma janela aberta e mantê-la sobre as demais. Oferece busca, seleção por clique em 5 segundos, fixar/desafixar várias janelas e atalho na Área de Trabalho.
+
+Para executar, baixe a pasta `janela-no-topo` (ou o artefato **JanelaNoTopo-Windows** disponível em [Actions](../../actions)), extraia os arquivos na mesma pasta e abra **`janela-no-topo/INICIAR.bat`**. Não requer Python nem internet. O artefato é um ZIP portátil, não um instalador `.exe`.
+
+## GravadorTelaWin v1.3
 
 Aplicativo de gravação de tela para **Windows 10 e 11 (64 bits)**, com interface gráfica em português. Grava vídeos em **MP4 (H.264)** e permite capturar áudio do microfone e/ou do computador.
 
