@@ -13,6 +13,8 @@ import sys
 import tkinter as tk
 from dataclasses import dataclass
 from PIL import ImageGrab, ImageTk
+from tkinter import filedialog, messagebox
+from gravador_v25_export import export_annotations
 from gravador_v24_history import (
     AnnotationHistory, HistoryChange, ANNOTATION_COLORS, STROKE_WIDTHS,
 )
@@ -30,7 +32,7 @@ GWL_EXSTYLE = -20
 SWP_NOACTIVATE = 0x0010
 SWP_SHOWWINDOW = 0x0040
 HWND_TOPMOST = -1
-ANNOTATION_TOOLS = ('Caneta', 'Seta', 'Retângulo')
+ANNOTATION_TOOLS = ('Caneta', 'Seta', 'Retângulo', 'Borracha', 'Texto')
 
 
 @dataclass(frozen=True)
@@ -117,6 +119,10 @@ class StudioOverlay:
         self.stroke_width = stroke_width if stroke_width in STROKE_WIDTHS else 4
         self.on_tool_changed = on_tool_changed
         self.active_tool: str | None = None
+        self.pending_erase: set[int] = set()
+        self.text_value = 'Texto'
+        self.text_entry: tk.Entry | None = None
+        self.font_sizes: dict[int, int] = {}
         self.history = AnnotationHistory()
         self.toolbar_window: tk.Toplevel | None = None
         self.toolbar_buttons: dict[str, tk.Button] = {}
@@ -289,6 +295,77 @@ class StudioOverlay:
         self.stroke_width = value
         self._refresh_toolbar_buttons()
 
+    def _text_changed(self, _event=None) -> None:
+        if self.text_entry is not None:
+            self.text_value = self.text_entry.get()[:240]
+
+    def _finish_erase(self) -> None:
+        pending = getattr(self, 'pending_erase', set())
+        if pending:
+            self._apply_history(self.history.erase(tuple(pending)))
+            pending.clear()
+
+    def _erase_at(self, x: float, y: float) -> None:
+        """Borracha por objeto: remove a anotação atingida, não o fundo gravado."""
+        radius = max(8, self.stroke_width * 2)
+        pending = getattr(self, 'pending_erase', set())
+        hits = self.canvas.find_overlapping(x-radius, y-radius, x+radius, y+radius)
+        for item in hits:
+            if item in self.history.visible and item not in pending:
+                self.canvas.itemconfigure(item, state='hidden')
+                pending.add(item)
+
+    def _annotation_records(self) -> list[dict]:
+        """Coleta só elementos do usuário; nunca inclui webcam/tela/halo/lupa."""
+        records = []
+        visible = self.history.visible
+        for item in self.canvas.find_all():
+            if item not in visible:
+                continue
+            kind = self.canvas.type(item)
+            points = [float(x) for x in self.canvas.coords(item)]
+            if kind == 'text':
+                records.append({'tipo': 'Texto', 'pontos': points,
+                                'cor': self.canvas.itemcget(item, 'fill'),
+                                'espessura': 2, 'texto': self.canvas.itemcget(item, 'text'),
+                                'fonte_px': self.font_sizes.get(item, 22)})
+            elif kind == 'rectangle':
+                records.append({'tipo': 'Retângulo', 'pontos': points,
+                                'cor': self.canvas.itemcget(item, 'outline'),
+                                'espessura': int(float(self.canvas.itemcget(item, 'width')))})
+            elif kind == 'line':
+                tool = 'Seta' if self.canvas.itemcget(item, 'arrow') == 'last' else 'Caneta'
+                records.append({'tipo': tool, 'pontos': points,
+                                'cor': self.canvas.itemcget(item, 'fill'),
+                                'espessura': int(float(self.canvas.itemcget(item, 'width')))})
+        return records
+
+    def save_annotations(self, destination) -> tuple:
+        """Grava PNG transparente e arquivo JSON editável, sem capturar a tela."""
+        return export_annotations(destination, self._annotation_records(),
+                                  self.bounds.width, self.bounds.height)
+
+    def export_dialog(self) -> None:
+        if not self.history.visible:
+            messagebox.showinfo('Anotações', 'Desenhe algo antes de salvar.',
+                                parent=self.toolbar_window or self.parent)
+            return
+        self._text_changed()
+        destination = filedialog.asksaveasfilename(parent=self.toolbar_window or self.parent,
+            title='Salvar anotações (PNG transparente + JSON)',
+            defaultextension='.png', initialfile='anotacoes.png',
+            filetypes=[('Imagem PNG', '*.png')])
+        if not destination:
+            return
+        try:
+            png, js = self.save_annotations(destination)
+            messagebox.showinfo('Anotações salvas',
+                                f'Imagem: {png}\nDados editáveis: {js}',
+                                parent=self.toolbar_window or self.parent)
+        except (OSError, ValueError, MemoryError) as exc:
+            messagebox.showerror('Falha ao salvar anotações', str(exc),
+                                 parent=self.toolbar_window or self.parent)
+
     def set_drawing(self, enabled: bool) -> None:
         self.drawing = bool(enabled)
         # A janela visual transparente nunca deve interceptar o mouse.
@@ -296,6 +373,7 @@ class StudioOverlay:
         if self.drawing:
             self._show_input_layer()
         else:
+            self._finish_erase()
             self._hide_input_layer()
             self.anchor = None
             self.active_item = None
@@ -314,15 +392,18 @@ class StudioOverlay:
 
     def clear(self) -> None:
         """Limpa em uma etapa que pode ser desfeita (Ctrl+Alt+U)."""
+        self._finish_erase()
         self._apply_history(self.history.clear())
         self.active_item = None
         self.anchor = None
         self.active_tool = None
 
     def undo(self) -> None:
+        self._finish_erase()
         self._apply_history(self.history.undo())
 
     def redo(self) -> None:
+        self._finish_erase()
         self._apply_history(self.history.redo())
 
     @staticmethod
@@ -344,7 +425,7 @@ class StudioOverlay:
         panel.configure(bg='#142235')
         panel.wm_attributes('-topmost', True)
         panel.wm_attributes('-alpha', 0.96)
-        panel.geometry('560x82+0+0')
+        panel.geometry('560x118+0+0')
         outer = tk.Frame(panel, bg='#142235', padx=7, pady=5)
         outer.pack(fill='both', expand=True)
         top = tk.Frame(outer, bg='#142235')
@@ -372,6 +453,17 @@ class StudioOverlay:
         self._toolbar_button(bottom, 'undo', '↶', self.undo)
         self._toolbar_button(bottom, 'redo', '↷', self.redo)
         self._toolbar_button(bottom, 'clear', 'Limpar', self.clear)
+        third = tk.Frame(outer, bg='#142235')
+        third.pack(fill='x', pady=(4, 0))
+        tk.Label(third, text='Texto:', fg='#d5e7ff', bg='#142235',
+                 font=('Segoe UI', 9)).pack(side='left')
+        self.text_entry = tk.Entry(third, width=36, bg='#26394f', fg='white',
+                                   insertbackground='white', relief='flat',
+                                   font=('Segoe UI', 9))
+        self.text_entry.insert(0, self.text_value)
+        self.text_entry.pack(side='left', padx=5)
+        self.text_entry.bind('<KeyRelease>', self._text_changed)
+        self._toolbar_button(third, 'save', 'Salvar PNG + JSON', self.export_dialog)
         panel.update_idletasks()
         panel.deiconify()
         self.toolbar_window = panel
@@ -420,7 +512,7 @@ class StudioOverlay:
         raw = int(panel.winfo_id())
         hwnd = int(api.GetAncestor(wintypes.HWND(raw), 2) or raw)
         api.SetWindowPos(wintypes.HWND(hwnd), wintypes.HWND(HWND_TOPMOST),
-                         int(x), int(y), 560, 82,
+                         int(x), int(y), 560, 118,
                          SWP_NOACTIVATE | SWP_SHOWWINDOW)
 
     def _start_toolbar_drag(self, event) -> None:
@@ -445,6 +537,7 @@ class StudioOverlay:
         panel = getattr(self, 'toolbar_window', None)
         self.toolbar_window = None
         self.toolbar_buttons = {}
+        self.text_entry = None
         self.toolbar_drag_anchor = None
         if panel is not None:
             try:
@@ -453,6 +546,7 @@ class StudioOverlay:
                 pass
 
     def pause(self) -> None:
+        self._finish_erase()
         self.visible = False
         self._hide_input_layer()
         self.window.withdraw()
@@ -465,6 +559,7 @@ class StudioOverlay:
             self._show_input_layer()
 
     def close(self) -> None:
+        self._finish_erase()
         if self.closed:
             return
         self.closed = True
@@ -474,6 +569,23 @@ class StudioOverlay:
 
     def _press(self, event) -> None:
         if not self.drawing:
+            return
+        if self.tool == 'Borracha':
+            self.pending_erase.clear()
+            self.active_tool = 'Borracha'
+            self._erase_at(event.x, event.y)
+            return
+        if self.tool == 'Texto':
+            self._text_changed()
+            value = self.text_value.strip()
+            if not value:
+                return
+            size = {2: 18, 4: 24, 7: 32}.get(self.stroke_width, 24)
+            item = self.canvas.create_text(event.x, event.y, anchor='nw',
+                      text=value, fill=ANNOTATION_COLORS[self.color_name],
+                      font=('Segoe UI', size, 'bold'))
+            self.font_sizes[item] = size
+            self._apply_history(self.history.record(item))
             return
         self.anchor = (event.x, event.y)
         self.active_tool = self.tool
@@ -492,7 +604,12 @@ class StudioOverlay:
                              event.x + 1, event.y + 1, outline=color, width=width)
 
     def _drag(self, event) -> None:
-        if not self.drawing or self.active_item is None or self.anchor is None:
+        if not self.drawing:
+            return
+        if self.active_tool == 'Borracha':
+            self._erase_at(event.x, event.y)
+            return
+        if self.active_item is None or self.anchor is None:
             return
         if self.active_tool == 'Caneta':
             self.canvas.coords(self.active_item,
@@ -501,7 +618,10 @@ class StudioOverlay:
             self.canvas.coords(self.active_item, *self.anchor, event.x, event.y)
 
     def _release(self, event) -> None:
-        if self.active_item is not None:
+        if self.active_tool == 'Borracha':
+            self._erase_at(event.x, event.y)
+            self._finish_erase()
+        elif self.active_item is not None:
             self._drag(event)
             self._apply_history(self.history.record(self.active_item))
         self.anchor = None

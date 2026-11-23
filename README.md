@@ -1,5 +1,5 @@
-> **Versão estável: GravadorTelaWin 2.3 RC2.** Desenho validado no Windows, incluindo correção da camada que recebe cliques. Integrado na branch `main`.
-> **Próxima prévia: GravadorTelaWin 2.4 RC1.** Barra flutuante com cores, espessuras e histórico desfazer/refazer. Consulte [README_V24.md](README_V24.md). Os recursos novos aguardam homologação real.
+> **Versão estável:** GravadorTelaWin 2.4 Estúdio, homologada no Windows e integrada à branch `main`.
+> **Nova prévia:** [GravadorTelaWin 2.5 RC1](README_V25.md) acrescenta borracha por objeto, inserção de texto e exportação das anotações em PNG transparente e JSON. A versão 2.5 permanece em homologação.
 
 # Aplicativos Windows — GravadorTelaWin e Janela no Topo
 
