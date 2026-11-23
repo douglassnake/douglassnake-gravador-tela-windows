@@ -1,3 +1,12 @@
+## 2.3.0-rc1 — efeitos visuais opcionais (23/11/2026)
+
+- Halo do cursor e indicador de clique esquerdo sobrepostos à área visível gravada.
+- Lupa 2× em quadro flutuante, atualizada até 3,3 vezes por segundo.
+- Anotações com caneta, seta e retângulo ativadas por atalho global; apagar desenhos sem reiniciar a gravação.
+- Efeitos desativados por padrão para preservar a qualidade homologada do Chrome e do áudio.
+- Novo módulo `gravador_v23_overlay.py` incluído no instalador local e no build Windows.
+- Versão em branch de prévia, aguardando confirmação da captura dos efeitos no Windows.
+
 ## 2.1.2-rc — ajustes de estabilidade e diagnóstico (23/11/2026)
 
 - Benchmark de aproximadamente 2 segundos de vídeo dinâmico para seleção automática de GPU, substituindo a aprovação apenas pelo teste pequeno de compatibilidade.
