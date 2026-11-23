@@ -1,10 +1,10 @@
-# GravadorTelaWin 2.5 RC1 — Borracha, textos e exportação de anotações
+# GravadorTelaWin 2.5 RC2 — Borracha, textos e exportação de anotações
 
 **Prévia para homologação em Windows 10/11 x64.** A v2.4 homologada continua na `main`.
 
 ## Ferramentas
 
-Com uma gravação ativa, pressione **Ctrl+Alt+D** para abrir o desenho e sua barra flutuante.
+Com uma gravação ativa, pressione **Ctrl+Alt+D** ou **F8** para abrir o desenho. Se os atalhos não funcionarem, volte à janela do GravadorTelaWin (Alt+Tab) e clique em **✎ DESENHAR (F8)**; ao ativar pelo botão, o aplicativo retorna ao Chrome.
 
 1. **Borracha** — clique ou arraste sobre um traço, retângulo, seta ou texto para apagar **o objeto inteiro**. Um arrasto é uma ação reversível (Ctrl+Alt+U). Não apaga pixels da página nem partes do vídeo.
 2. **Texto** — selecione **Texto**, escreva na caixa **Texto:** da barra e clique onde deseja posicionar a legenda. O texto segue a cor selecionada; as opções 2/4/7 px definem tamanhos de fonte de 18/24/32 px. Ao sair do desenho, o texto continua no overlay do vídeo.
@@ -15,7 +15,9 @@ As ferramentas **Caneta, Seta e Retângulo**, cores, espessuras, desfazer/refaze
 
 ## Atalhos
 
-- `Ctrl+Alt+D`: entrar/sair do desenho.
+- `Ctrl+Alt+D`: entrar/sair do desenho (original).
+- `F8`: entrar/sair do desenho (alternativo).
+- Botão **✎ DESENHAR (F8)**: opção sem teclado, durante gravação.
 - `Ctrl+Alt+U`: desfazer, inclusive a borracha.
 - `Ctrl+Alt+Y`: refazer.
 - `Ctrl+Alt+E`: apagar todas as anotações (reversível).
@@ -39,3 +41,11 @@ As ferramentas **Caneta, Seta e Retângulo**, cores, espessuras, desfazer/refaze
 - Arquivos PNG/JSON podem revelar textos escritos pelo usuário. Revise-os antes de compartilhar.
 - Captura visível de janela do Chrome deve continuar com a janela à frente, sem alterar posição durante a gravação.
 - **Teste real em Windows pendente.** A aprovação de testes locais e CI não certifica a captura do overlay em todas as GPUs.
+
+## Correção RC2 — ativação das anotações
+
+- F8 funciona como atalho global alternativo; não substitui Ctrl+Alt+D.
+- Se o Windows recusar o registro do atalho original, a interface indica a colisão e sugere F8 ou o botão.
+- O botão **✎ DESENHAR (F8)** fica ativo somente durante a gravação e permite ativar a camada sem depender do teclado.
+- Exceções da camada de desenho não interrompem os demais comandos ou a gravação.
+- Feche versões antigas do gravador antes de testar a RC2 e confirme o título **2.5 RC2**.
