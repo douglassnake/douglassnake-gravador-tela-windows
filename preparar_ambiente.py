@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent
 VENV = ROOT / '.venv'
 EXE = VENV / 'Scripts' / 'python.exe' if os.name == 'nt' else VENV / 'bin' / 'python'
 REQUIREMENTS = ROOT / 'requirements.txt'
-MARKER = VENV / 'instalado-v1.3.json'
+MARKER = VENV / 'instalado-v2.0.json'
 LOGFILE = ROOT / 'diagnostico_instalacao.log'
 SOURCE = ROOT / 'gravador_tela.py'
 RECOMMENDED = [(3, 12), (3, 11), (3, 13)]
@@ -251,13 +251,13 @@ def launch_app():
 def build_exe():
     args = [
         str(EXE), '-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile', '--windowed',
-        '--name', 'GravadorTelaWin', '--collect-all', 'imageio_ffmpeg',
+        '--name', 'GravadorTelaWin_v2_PREVIA', '--collect-all', 'imageio_ffmpeg',
         '--collect-all', 'soundcard', '--collect-all', 'comtypes',
         '--hidden-import', 'comtypes', '--hidden-import', 'comtypes.client',
         str(SOURCE),
     ]
     ok, _ = shell(args, 'Gerar .exe com PyInstaller', timeout=1800)
-    result = ROOT / 'dist' / 'GravadorTelaWin.exe'
+    result = ROOT / 'dist' / 'GravadorTelaWin_v2_PREVIA.exe'
     if not ok or not result.exists():
         raise SetupError('Erro na compilacao do executavel. Consulte diagnostico_instalacao.log.')
     report('\nEXE criado em: ' + str(result))
@@ -283,7 +283,7 @@ def main() -> int:
     try:
         LOG = LOGFILE.open('a', encoding='utf-8')
         report('\n' + '=' * 68)
-        report('GravadorTelaWin 1.3 | ' + datetime.datetime.now().isoformat(timespec='seconds'))
+        report('GravadorTelaWin 2.0-rc1 | ' + datetime.datetime.now().isoformat(timespec='seconds'))
         report('Acao: ' + action)
         report('Diretorio: ' + str(ROOT))
         base, info = select_python()
