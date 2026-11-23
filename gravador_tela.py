@@ -37,8 +37,11 @@ from gravador_v21_perf import (
     ENCODER_LABELS, PROFILE_PRESETS, load_progress, save_health_snapshot,
     select_encoder, append_performance_sample,
 )
+from gravador_v22_studio import (
+    CAMERA_OFF, list_webcams, studio_video_flags, multi_audio_mux_command,
+)
 
-APP_NAME = "GravadorTelaWin 2.1.2 (estabilidade)"
+APP_NAME = "GravadorTelaWin 2.2 RC1 (Estúdio)"
 RATE = 48_000
 
 
@@ -74,6 +77,8 @@ class Settings:
     system_audio: bool
     folder: Path
     encoder_preference: str = "Automático"
+    webcam_device: str | None = None
+    separate_audio_tracks: bool = False
 
 
 class AudioCapture:
@@ -197,12 +202,12 @@ class RecordingEngine:
         # Hotfix: gdigrab(hwnd=...) pode retornar quadros pretos no Chrome.
         # Reutiliza o modo por região, que já funciona no Windows do usuário.
         source = desktop_capture_args(a.x, a.y, a.width, a.height)
+        camera_inputs, video_flags = studio_video_flags(getattr(self.settings, "webcam_device", None), a.width)
         return [
             self.ffmpeg, "-hide_banner", "-loglevel", "warning", "-y",
             "-stats_period", "1", "-progress", str(progress_file),
             "-f", "gdigrab", "-framerate", str(self.settings.fps),
-            "-draw_mouse", "1", *source,
-            "-an", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "-draw_mouse", "1", *source, *camera_inputs, *video_flags,
             "-c:v", codec, *encoder_opts,
             "-g", str(2 * self.settings.fps), "-pix_fmt", "yuv420p", str(path),
         ]
@@ -236,7 +241,7 @@ class RecordingEngine:
             segment.audio.append(source)
             source.start()
 
-        time.sleep(0.6 if self.encoder.codec != "libx264" else 0.15)
+        time.sleep(0.8 if getattr(self.settings, "webcam_device", None) else (0.6 if self.encoder.codec != "libx264" else 0.15))
         if process.poll() is not None:
             for source in segment.audio:
                 source.stop()
@@ -353,6 +358,15 @@ class RecordingEngine:
 
         available = [a for a in seg.audio if a.valid]
         duration = self._video_duration(seg.video)
+        if self.settings.separate_audio_tracks:
+            names = (["microfone"] if self.settings.mic else []) + (["sistema"] if self.settings.system_audio else [])
+            tracks = []
+            for name in names:
+                source = next((a for a in available if a.kind == name), None)
+                tracks.append((name, source.path if source else None,
+                               self._audio_filter(len(tracks) + 1, source) if source else None))
+            self._run_ffmpeg(multi_audio_mux_command(self.ffmpeg, seg.video, ready, duration, tracks))
+            return ready
         inputs = [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(seg.video)]
         if not available:
             inputs += ["-f", "lavfi", "-i", f"anullsrc=r={RATE}:cl=stereo"]
@@ -420,6 +434,7 @@ class RecordingEngine:
             self._run_ffmpeg([
                 self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
                 "-f", "concat", "-safe", "0", "-i", str(concat_file),
+                *(["-map", "0"] if self.settings.separate_audio_tracks else []),
                 "-c", "copy", "-movflags", "+faststart", str(partial),
             ])
         if not partial.is_file() or partial.stat().st_size < 1000:
@@ -556,8 +571,8 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("985x805")
-        self.minsize(855, 740)
+        self.geometry("985x870")
+        self.minsize(855, 770)
         self.configure(bg="#111827")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.events: queue.Queue = queue.Queue()
@@ -601,7 +616,7 @@ class App(tk.Tk):
 
         main = tk.Frame(self, bg="#111827", padx=23, pady=18)
         main.pack(fill="both", expand=True)
-        tk.Label(main, text="GRAVADOR DE TELA • V2.1.1", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
+        tk.Label(main, text="GRAVADOR DE TELA • ESTÚDIO V2.2 RC1", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
         tk.Label(main, text="Windows 10/11  •  MP4  •  Captura local, sem envio para a nuvem",
                  font=("Segoe UI", 10), bg="#111827", fg="#9ca3af").pack(anchor="w", pady=(1, 17))
 
@@ -669,13 +684,27 @@ class App(tk.Tk):
         self.mic_check.grid(row=3, column=0, columnspan=2, sticky="w")
         self.sys_check = ttk.Checkbutton(controls, text="Áudio do computador", variable=self.sys_var, style="Dark.TCheckbutton")
         self.sys_check.grid(row=3, column=2, columnspan=2, sticky="w")
+        tk.Label(controls, text="ESTÚDIO (opcional)", bg="#1d293a", fg="#8ebeff",
+                 font=("Segoe UI", 10, "bold")).grid(row=4, column=0, columnspan=4, sticky="w", pady=(10, 5))
+        self.webcam_var = tk.StringVar(value=CAMERA_OFF)
+        self.webcam_combo = ttk.Combobox(controls, textvariable=self.webcam_var, values=[CAMERA_OFF],
+                                        state="readonly", style="Dark.TCombobox")
+        self.webcam_combo.grid(row=5, column=0, columnspan=3, sticky="ew", padx=(0, 8), pady=(0, 4))
+        self.webcam_button = tk.Button(controls, text="Buscar webcams", command=self._refresh_cameras,
+                                       bg="#334963", fg="white", relief="flat", cursor="hand2", padx=10)
+        self.webcam_button.grid(row=5, column=3, sticky="ew", pady=(0, 4))
+        self.separate_tracks_var = tk.BooleanVar(value=False)
+        self.separate_tracks_check = ttk.Checkbutton(
+            controls, text="Guardar mix + trilhas de áudio separadas (MP4)",
+            variable=self.separate_tracks_var, style="Dark.TCheckbutton")
+        self.separate_tracks_check.grid(row=6, column=0, columnspan=4, sticky="w", pady=(3, 0))
         controls.columnconfigure(0, weight=1)
         controls.columnconfigure(1, weight=1)
         controls.columnconfigure(2, weight=1)
         controls.columnconfigure(3, weight=1)
         self.audio_levels = tk.StringVar(value="MIC: —    SISTEMA: —")
         tk.Label(controls, textvariable=self.audio_levels, bg="#1d293a", fg="#7cddc0",
-                 font=("Consolas", 10)).grid(row=4, column=0, columnspan=4, sticky="w", pady=(11, 0))
+                 font=("Consolas", 10)).grid(row=7, column=0, columnspan=4, sticky="w", pady=(9, 0))
 
         paths = tk.Frame(main, bg="#1d293a", padx=20, pady=15)
         paths.pack(fill="x", pady=(12, 0))
@@ -716,6 +745,20 @@ class App(tk.Tk):
         tk.Label(foot, textvariable=self.elapsed_var, bg="#111827", fg="white", font=("Consolas", 16, "bold")).pack(side="right")
         tk.Label(main, text="Atalhos globais: Ctrl + Shift + R  (iniciar/parar)   •   Ctrl + Shift + P  (pausar/retomar)",
                  bg="#111827", fg="#8391a4", font=("Segoe UI", 9)).pack(anchor="w", pady=(15, 0))
+
+    def _refresh_cameras(self) -> None:
+        """Busca dispositivos sem bloquear o Tkinter. Não abre a webcam."""
+        if self.state != "idle":
+            return
+        self.webcam_button.configure(state="disabled")
+        self.status_var.set("Buscando webcams no Windows...")
+        def work():
+            try:
+                devices = list_webcams(imageio_ffmpeg.get_ffmpeg_exe())
+                self.events.put(("webcams", devices))
+            except Exception as exc:
+                self.events.put(("webcam_error", str(exc)))
+        threading.Thread(target=work, daemon=True, name="webcams").start()
 
     def _refresh_window_choices(self, keep_selection: bool = True) -> None:
         previous = self.screen_var.get() if keep_selection else self.screens[1].name
@@ -851,14 +894,17 @@ class App(tk.Tk):
             crf = preset[1]
         return Settings(self._selected_screen(), int(self.fps_var.get()), crf,
                         self.mic_var.get(), self.sys_var.get(), folder,
-                        self.encoder_var.get())
+                        self.encoder_var.get(),
+                        None if self.webcam_var.get() == CAMERA_OFF else self.webcam_var.get(),
+                        self.separate_tracks_var.get())
 
     def _set_config_enabled(self, enabled: bool) -> None:
         readonly = "readonly" if enabled else "disabled"
         for widget in [self.screen_combo, self.fps_combo, self.quality_combo,
-                       self.profile_combo, self.encoder_combo]:
+                       self.profile_combo, self.encoder_combo, self.webcam_combo]:
             widget.configure(state=readonly)
-        for widget in [self.mic_check, self.sys_check, self.area_button, self.browse_button]:
+        for widget in [self.mic_check, self.sys_check, self.separate_tracks_check,
+                       self.webcam_button, self.area_button, self.browse_button]:
             widget.configure(state="normal" if enabled else "disabled")
         self.folder_entry.configure(state="normal" if enabled else "disabled")
         self.refresh_windows_button.configure(state="normal" if enabled else "disabled")
@@ -1040,6 +1086,16 @@ class App(tk.Tk):
                 elif event == "recovery_error":
                     self._reset()
                     messagebox.showerror("Falha na recuperação", str(data))
+                elif event == "webcams":
+                    self.webcam_combo.configure(values=[CAMERA_OFF] + data)
+                    if self.webcam_var.get() not in [CAMERA_OFF] + data:
+                        self.webcam_var.set(CAMERA_OFF)
+                    self.webcam_button.configure(state="normal")
+                    self.status_var.set(f"Webcams encontradas: {len(data)}. Escolha uma ou mantenha desativada.")
+                elif event == "webcam_error":
+                    self.webcam_button.configure(state="normal")
+                    self.webcam_var.set(CAMERA_OFF)
+                    self.status_var.set(f"Falha ao buscar webcams: {data}")
                 elif event == "warning":
                     self.status_var.set(str(data))
                 elif event == "shortcut":
