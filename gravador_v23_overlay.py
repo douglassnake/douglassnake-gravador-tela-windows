@@ -15,6 +15,10 @@ from dataclasses import dataclass
 from PIL import ImageGrab, ImageTk
 
 TRANSPARENT = '#ff00ff'
+# Camada de entrada minimamente visível: alpha > 0 permite hit-test no Windows.
+# A camada de desenho propriamente dita preserva suas cores/opacity originais.
+INPUT_LAYER_BG = '#101820'
+INPUT_LAYER_ALPHA = 0.05
 WS_EX_TRANSPARENT = 0x00000020
 WS_EX_LAYERED = 0x00080000
 WS_EX_TOOLWINDOW = 0x00000080
@@ -98,6 +102,7 @@ class StudioOverlay:
             raise RuntimeError('Efeitos visuais disponíveis apenas no Windows')
         if tool not in ANNOTATION_TOOLS:
             raise ValueError('Ferramenta de anotação inválida')
+        self.parent = parent
         self.bounds = bounds
         self.highlight = bool(highlight)
         self.clicks = bool(clicks)
@@ -114,6 +119,8 @@ class StudioOverlay:
         self.zoom_item: int | None = None
         self.zoom_frame: int | None = None
         self.zoom_caption: int | None = None
+        self.input_window: tk.Toplevel | None = None
+        self.input_canvas: tk.Canvas | None = None
         self.window = tk.Toplevel(parent)
         self.window.withdraw()
         self.window.overrideredirect(True)
@@ -175,6 +182,62 @@ class StudioOverlay:
         setter(wintypes.HWND(hwnd), GWL_EXSTYLE, updated)
         self._place()
 
+    def _show_input_layer(self) -> None:
+        """Captura arrasto numa camada com alpha > 0, sem apagar o vídeo.
+
+        A camada visual usa -transparentcolor (colorkey); pixels transparentes
+        NÃO participam do hit-test do Windows mesmo sem WS_EX_TRANSPARENT.
+        Um escudo separado com alpha mínimo recebe os cliques e encaminha
+        coordenadas ao Canvas visual sem reduzir a opacidade dos desenhos.
+        """
+        if self.closed or not self.visible or self.input_window is not None:
+            return
+        shield = tk.Toplevel(self.parent)
+        shield.withdraw()
+        shield.overrideredirect(True)
+        shield.configure(bg=INPUT_LAYER_BG)
+        shield.wm_attributes('-topmost', True)
+        # Não usar -transparentcolor: isso causava o bug dos cliques ignorados.
+        shield.wm_attributes('-alpha', INPUT_LAYER_ALPHA)
+        shield.geometry(f'{self.bounds.width}x{self.bounds.height}+0+0')
+        surface = tk.Canvas(shield, bg=INPUT_LAYER_BG, highlightthickness=0,
+                            bd=0, cursor='crosshair', width=self.bounds.width,
+                            height=self.bounds.height)
+        surface.pack(fill='both', expand=True)
+        surface.bind('<ButtonPress-1>', self._press)
+        surface.bind('<B1-Motion>', self._drag)
+        surface.bind('<ButtonRelease-1>', self._release)
+        shield.bind('<Escape>', lambda _: self.set_drawing(False))
+        shield.update_idletasks()
+        shield.deiconify()
+        # Evita confusão com coordenadas relativas em desktops multimonitor.
+        self._position_input_layer(shield)
+        self.input_window = shield
+        self.input_canvas = surface
+        # O overlay visual deve ficar em cima do escudo e permanecer click-through.
+        self._place()
+
+    def _position_input_layer(self, shield: tk.Toplevel) -> None:
+        api = ctypes.windll.user32
+        api.GetAncestor.argtypes = [wintypes.HWND, ctypes.c_uint]
+        api.GetAncestor.restype = wintypes.HWND
+        raw = int(shield.winfo_id())
+        hwnd = int(api.GetAncestor(wintypes.HWND(raw), 2) or raw)
+        api.SetWindowPos(wintypes.HWND(hwnd), wintypes.HWND(HWND_TOPMOST),
+                         int(self.bounds.x), int(self.bounds.y),
+                         int(self.bounds.width), int(self.bounds.height),
+                         SWP_NOACTIVATE | SWP_SHOWWINDOW)
+
+    def _hide_input_layer(self) -> None:
+        window = self.input_window
+        self.input_window = None
+        self.input_canvas = None
+        if window is not None:
+            try:
+                window.destroy()
+            except tk.TclError:
+                pass
+
     def set_highlight(self, enabled: bool) -> None:
         self.highlight = bool(enabled)
         if not enabled:
@@ -197,7 +260,14 @@ class StudioOverlay:
 
     def set_drawing(self, enabled: bool) -> None:
         self.drawing = bool(enabled)
-        self._set_pass_through(not self.drawing)
+        # A janela visual transparente nunca deve interceptar o mouse.
+        self._set_pass_through(True)
+        if self.drawing:
+            self._show_input_layer()
+        else:
+            self._hide_input_layer()
+            self.anchor = None
+            self.active_item = None
         self.canvas.itemconfigure(self.mode_text,
             state='normal' if self.drawing else 'hidden')
 
@@ -212,18 +282,22 @@ class StudioOverlay:
 
     def pause(self) -> None:
         self.visible = False
+        self._hide_input_layer()
         self.window.withdraw()
 
     def resume(self) -> None:
         self.visible = True
         self.window.deiconify()
         self._place()
+        if self.drawing:
+            self._show_input_layer()
 
     def close(self) -> None:
         if self.closed:
             return
         self.closed = True
         self.visible = False
+        self._hide_input_layer()
         self.window.destroy()
 
     def _press(self, event) -> None:

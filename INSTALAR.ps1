@@ -10,7 +10,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$Versao = '2.3.0-rc1'
+$Versao = '2.3.0-rc2'
 $PastaOrigem = $PSScriptRoot
 $PastaLocal = Join-Path $env:LOCALAPPDATA 'GravadorTelaWin'
 $PastaPython = Join-Path $PastaLocal 'Runtime\Python312'
@@ -263,7 +263,7 @@ try {
         throw "Preparacao falhou com codigo $retorno. Consulte o diagnostico."
     }
     if ($Acao -eq 'GerarEXE') {
-        Registrar "Executavel criado em: $(Join-Path $PastaLocal 'dist\GravadorTelaWin_v2_1_Chrome_PREVIA.exe')"
+        Registrar "Executavel criado em: $(Join-Path $PastaLocal 'dist\GravadorTelaWin_v2_3_RC2_DESENHO.exe')"
     }
     else { Registrar 'Aplicativo iniciado a partir do disco local.' }
     Registrar 'RESULTADO: OK'

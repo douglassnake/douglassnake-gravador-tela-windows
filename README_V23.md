@@ -1,4 +1,4 @@
-# GravadorTelaWin 2.3 RC1 — Cursor, lupa e anotações
+# GravadorTelaWin 2.3 RC2 — Cursor, lupa e anotações
 
 Esta **prévia** acrescenta efeitos de apresentação **opcionais**, preservando o motor de gravação e os padrões homologados da v2.2.
 
@@ -48,3 +48,19 @@ Antes de gravar, escolha **Caneta**, **Seta** ou **Retângulo** no painel de efe
 ## Status
 
 **Candidato a homologação.** Testes automatizados e captura sintética não substituem a confirmação dos efeitos na gravação de tela real do Windows. A v2.2 já aprovada permanece disponível na branch `main`.
+
+## Correção RC2 — desenho que não recebia o mouse
+
+Se o atalho `Ctrl+Alt+D` indicava **Desenho ON**, mas a caneta não
+traçava, a causa era o fundo integralmente transparente da janela de efeitos.
+Na RC2, durante o modo desenho, uma **camada temporária de captura do mouse**
+recebe os eventos sem enviá-los ao Chrome; a camada visual mantém a cor e o
+brilho dos traços. A camada de entrada pode causar uma leve alteração de
+luminosidade (~5%) enquanto o desenho estiver ativo. Ao sair do modo desenho,
+pausar ou encerrar, essa camada é removida.
+
+**Teste rápido:** escolha `Caneta` no painel, comece a gravar o Chrome, pressione
+`Ctrl+Alt+D` e arraste o mouse. Um traço amarelo deve surgir na tela. Pressione
+`Ctrl+Alt+E` para limpar e `Ctrl+Alt+D` para voltar a clicar no Chrome.
+Confira o vídeo final: em alguns drivers, sobreposições transparentes podem não
+aparecer no MP4, mesmo aparecendo durante a gravação.
