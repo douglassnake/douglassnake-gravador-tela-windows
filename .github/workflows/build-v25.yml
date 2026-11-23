@@ -1,8 +1,8 @@
-name: Testar e compilar GravadorTelaWin 2.5 RC1
+name: Testar e compilar GravadorTelaWin 2.5 RC2
 
 on:
   push:
-    branches: [feature/gravador-v2-5-anotacoes]
+    branches: [feature/gravador-v2-5-anotacoes, fix/v25-atalho-desenho-rc2]
     paths:
       - 'gravador_tela.py'
       - 'gravador_v23_overlay.py'
@@ -57,13 +57,13 @@ jobs:
       - name: Compilar prévia Windows
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name GravadorTelaWin_v2_5_ESTUDIO_RC1 --collect-all imageio_ffmpeg --collect-all soundcard --collect-all comtypes --hidden-import comtypes --hidden-import comtypes.client gravador_tela.py
-          if (!(Test-Path 'dist/GravadorTelaWin_v2_5_ESTUDIO_RC1.exe')) { throw 'Executável não gerado' }
-          Get-FileHash 'dist/GravadorTelaWin_v2_5_ESTUDIO_RC1.exe' -Algorithm SHA256
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name GravadorTelaWin_v2_5_ESTUDIO_RC2 --collect-all imageio_ffmpeg --collect-all soundcard --collect-all comtypes --hidden-import comtypes --hidden-import comtypes.client gravador_tela.py
+          if (!(Test-Path 'dist/GravadorTelaWin_v2_5_ESTUDIO_RC2.exe')) { throw 'Executável não gerado' }
+          Get-FileHash 'dist/GravadorTelaWin_v2_5_ESTUDIO_RC2.exe' -Algorithm SHA256
       - name: Publicar executável para validação
         uses: actions/upload-artifact@v4
         with:
-          name: GravadorTelaWin-v2.5-Anotacoes-RC1-Windows-x64
-          path: dist/GravadorTelaWin_v2_5_ESTUDIO_RC1.exe
+          name: GravadorTelaWin-v2.5-Atalho-Desenho-RC2-Windows-x64
+          path: dist/GravadorTelaWin_v2_5_ESTUDIO_RC2.exe
           if-no-files-found: error
           retention-days: 30
