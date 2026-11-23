@@ -31,14 +31,14 @@ from PIL import Image, ImageGrab, ImageTk
 
 from gravador_v2_utils import (
     enumerate_windows, window_info, find_recoverable_sessions,
-    write_session_manifest, recover_session,
+    write_session_manifest, recover_session, visible_window_rect, desktop_capture_args,
 )
 from gravador_v21_perf import (
     ENCODER_LABELS, PROFILE_PRESETS, load_progress, save_health_snapshot,
     select_encoder,
 )
 
-APP_NAME = "GravadorTelaWin 2.1 (prévia)"
+APP_NAME = "GravadorTelaWin 2.1.1 (correção Chrome)"
 RATE = 48_000
 
 
@@ -62,7 +62,7 @@ class Screen:
     y: int
     width: int
     height: int
-    hwnd: int | None = None  # HWND = captura da janela, não das coordenadas do desktop
+    hwnd: int | None = None  # HWND identifica a janela; captura usa a área visível do desktop
 
 
 @dataclass
@@ -192,10 +192,9 @@ class RecordingEngine:
         codec = encoder.codec if encoder else "libx264"
         encoder_opts = encoder.options if encoder else ("-preset", "veryfast", "-crf", str(self.settings.crf))
         progress_file = getattr(self, "_progress_path", path.with_suffix(".progress"))
-        source = ["-i", f"hwnd={a.hwnd:#x}"] if a.hwnd is not None else [
-            "-offset_x", str(a.x), "-offset_y", str(a.y),
-            "-video_size", f"{a.width}x{a.height}", "-i", "desktop",
-        ]
+        # Chrome acelerado pode retornar quadros pretos com gdigrab(hwnd=...).
+        # Captura a região visível calculada automaticamente, igual ao modo área.
+        source = desktop_capture_args(a.x, a.y, a.width, a.height)
         return [
             self.ffmpeg, "-hide_banner", "-loglevel", "warning", "-y",
             "-stats_period", "1", "-progress", str(progress_file),
@@ -591,7 +590,7 @@ class App(tk.Tk):
 
         main = tk.Frame(self, bg="#111827", padx=23, pady=18)
         main.pack(fill="both", expand=True)
-        tk.Label(main, text="GRAVADOR DE TELA • V2.1", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
+        tk.Label(main, text="GRAVADOR DE TELA • V2.1.1", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
         tk.Label(main, text="Windows 10/11  •  MP4  •  Captura local, sem envio para a nuvem",
                  font=("Segoe UI", 10), bg="#111827", fg="#9ca3af").pack(anchor="w", pady=(1, 17))
 
@@ -724,11 +723,6 @@ class App(tk.Tk):
         try:
             if self.state in ("idle", "paused"):
                 area = self._selected_screen()
-                if area.hwnd is not None:
-                    target = window_info(area.hwnd)
-                    if target is None:
-                        raise RuntimeError("Janela indisponível ou minimizada")
-                    area = Screen(target.title, target.x, target.y, target.width, target.height, target.hwnd)
                 image = ImageGrab.grab(bbox=(area.x, area.y, area.x + area.width, area.y + area.height),
                                        all_screens=True).convert("RGB")
                 image.thumbnail((235, 132), Image.Resampling.LANCZOS)
@@ -784,7 +778,10 @@ class App(tk.Tk):
             target = window_info(self.window_lookup[value])
             if target is None:
                 raise ValueError("A janela foi fechada ou minimizada. Atualize a lista.")
-            return Screen(target.title, target.x, target.y, target.width, target.height, target.hwnd)
+            x, y, width, height = visible_window_rect(
+                target, (self.screens[0].x, self.screens[0].y,
+                         self.screens[0].width, self.screens[0].height))
+            return Screen(target.title, x, y, width, height, target.hwnd)
         if value == "Área personalizada":
             if self.selected_area is None:
                 raise ValueError("Clique em 'Selecionar área' para definir o recorte.")
@@ -797,7 +794,8 @@ class App(tk.Tk):
     def _update_area_label(self) -> None:
         try:
             s = self._selected_screen()
-            self.area_label.configure(text=f"{s.width} × {s.height} pixels  •  Origem: ({s.x}, {s.y})")
+            warning = "  •  Janela visível: não cubra nem mova durante a captura" if s.hwnd is not None else ""
+            self.area_label.configure(text=f"{s.width} × {s.height} pixels  •  Origem: ({s.x}, {s.y}){warning}")
         except ValueError:
             self.area_label.configure(text="Nenhuma área personalizada foi selecionada")
 
@@ -855,6 +853,41 @@ class App(tk.Tk):
         self.refresh_windows_button.configure(state="normal" if enabled else "disabled")
         self.recover_button.configure(state="normal" if enabled else "disabled")
 
+    def _prepare_visible_window(self, hwnd: int | None) -> None:
+        """Minimiza o gravador para não cobrir a área da janela selecionada."""
+        if hwnd is None or sys.platform != "win32":
+            return
+        self.iconify()
+        try:
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+            user32.SetForegroundWindow.restype = wintypes.BOOL
+            user32.SetForegroundWindow(wintypes.HWND(hwnd))
+        except (AttributeError, OSError, ValueError):
+            pass
+
+    def _resume_visible_window(self) -> None:
+        """Retoma a sessão após a interface sair da frente."""
+        try:
+            assert self.engine is not None
+            self.engine.start_segment()
+        except Exception as exc:
+            self.state = "paused"
+            self.pause_button.configure(state="normal")
+            self.record_button.configure(state="normal")
+            self.deiconify()
+            messagebox.showerror("Não foi possível retomar", str(exc))
+            return
+        self.segment_started = time.monotonic()
+        self.state = "recording"
+        self.pause_button.configure(text="Ⅱ  PAUSAR", state="normal")
+        self.record_button.configure(state="normal")
+        if self.engine and self.engine.settings.area.hwnd is not None:
+            self.status_var.set("● Gravando janela visível (não cubra nem mova)")
+        else:
+            self.status_var.set("● Gravando a tela...")
+
     def _record_action(self) -> None:
         if self.state == "idle":
             try:
@@ -872,6 +905,8 @@ class App(tk.Tk):
             self.record_button.configure(state="disabled")
             self.pause_button.configure(state="disabled")
             self.status_var.set("Testando codificador GPU e preparando gravação...")
+            if settings.area.hwnd is not None:
+                self._prepare_visible_window(settings.area.hwnd)
 
             def start_in_background():
                 engine = None
@@ -883,7 +918,10 @@ class App(tk.Tk):
                     self.events.put(("start_error", (str(exc), engine.tempdir if engine else None)))
 
             self.job_thread = threading.Thread(target=start_in_background, daemon=True, name="start")
-            self.job_thread.start()
+            if settings.area.hwnd is not None:
+                self.after(350, self.job_thread.start)  # aguarda o Windows redesenhar o Chrome
+            else:
+                self.job_thread.start()
         elif self.state in ("recording", "paused"):
             if self.state == "recording":
                 self.recorded_sec += time.monotonic() - self.segment_started
@@ -902,16 +940,14 @@ class App(tk.Tk):
             self.record_button.configure(state="disabled")
             self._launch_job("pause")
         elif self.state == "paused":
-            try:
-                assert self.engine is not None
-                self.engine.start_segment()
-            except Exception as exc:
-                messagebox.showerror("Não foi possível retomar", str(exc))
-                return
-            self.segment_started = time.monotonic()
-            self.state = "recording"
-            self.pause_button.configure(text="Ⅱ  PAUSAR")
-            self.status_var.set("● Gravando a tela...")
+            if self.engine is not None and self.engine.settings.area.hwnd is not None:
+                self.state = "resuming"
+                self.pause_button.configure(state="disabled")
+                self.record_button.configure(state="disabled")
+                self._prepare_visible_window(self.engine.settings.area.hwnd)
+                self.after(350, self._resume_visible_window)
+            else:
+                self._resume_visible_window()
 
     def _launch_job(self, task: str) -> None:
         def work():
@@ -952,10 +988,12 @@ class App(tk.Tk):
                     self.state = "recording"
                     self.record_button.configure(text="■  ENCERRAR E SALVAR", bg="#c93543", state="normal")
                     self.pause_button.configure(state="normal")
-                    self.status_var.set("● Gravando a tela • " + data.encoder.label)
+                    recording_label = "janela visível" if data.settings.area.hwnd is not None else "a tela"
+                    self.status_var.set("● Gravando " + recording_label + " • " + data.encoder.label)
                 elif event == "start_error":
                     msg, tmp = data
                     self._reset()
+                    self.deiconify()
                     messagebox.showerror("Não foi possível iniciar", f"{msg}\n\nArquivos temporários: {tmp or 'não criados'}")
                 elif event == "paused":
                     self.state = "paused"
@@ -966,6 +1004,7 @@ class App(tk.Tk):
                 elif event == "finished":
                     path, warnings = data
                     self._reset()
+                    self.deiconify()
                     self.status_var.set(f"Salvo: {path.name}")
                     details = "\n\nAvisos de áudio:\n" + "\n".join(warnings[:5]) if warnings else ""
                     if messagebox.askyesno("Gravação concluída", f"Arquivo salvo com sucesso:\n{path}{details}\n\nAbrir pasta da gravação?"):
@@ -973,6 +1012,7 @@ class App(tk.Tk):
                 elif event == "error":
                     msg, workdir = data
                     self._reset()
+                    self.deiconify()
                     messagebox.showerror("Erro na gravação", f"{msg}\n\nArquivos temporários para recuperação:\n{workdir}")
                 elif event == "recovered":
                     self._reset()

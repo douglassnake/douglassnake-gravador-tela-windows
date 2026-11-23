@@ -2,6 +2,12 @@
 
 Este repositório reúne ferramentas de uso local para Windows 10 e 11.
 
+## GravadorTelaWin 2.1.1 — correção da janela Chrome
+
+A captura por janela foi ajustada para reutilizar a captura de **área visível**, em vez de `gdigrab(hwnd=...)`. Para vídeo do Chrome, mantenha a janela aberta e na mesma posição, sem cobri-la. O gravador minimiza automaticamente ao iniciar. [Detalhes e teste](README_V21.md).
+
+Prévia em `fix/captura-janela-chrome`, sem substituir `main`.
+
 ## GravadorTelaWin 2.1 — prévia RC1 (desempenho)
 
 [**Novidades da v2.1**](README_V21.md): aceleração H.264 por GPU com autoteste e fallback de CPU, perfis de gravação, FPS real, velocidade do encoder, espaço livre e encerramento preventivo.

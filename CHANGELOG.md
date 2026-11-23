@@ -1,3 +1,11 @@
+## 2.1.1-rc — Chrome (23/11/2026)
+
+- Captura de janela via área visível de desktop, contornando limitações de GDI por HWND com Chrome.
+- Recorte seguro para múltiplos monitores e bordas fora do desktop.
+- Gravador minimiza e tenta ativar a janela escolhida; reaparece ao concluir.
+- Testes de regressão para captura por janela e preservação do motor de áudio, GPU e exportação.
+- Limitação documentada: janela deve ficar visível e sem ser movida.
+
 # Histórico de versões
 
 ## 2.1.0-rc1 — desempenho (prévia)
