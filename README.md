@@ -1,12 +1,14 @@
+> **Atenção:** esta branch é uma prévia experimental. Os testes de fluidez e de áudio dependem de um Windows real. Consulte [README_V21.md](README_V21.md) para as novidades da v2.1.2.
+
 # Aplicativos Windows — GravadorTelaWin e Janela no Topo
 
 Este repositório reúne ferramentas de uso local para Windows 10 e 11.
 
-## GravadorTelaWin 2.1.1 — correção da janela Chrome
+## GravadorTelaWin 2.1.1 — prévia com correção para Chrome
 
-A captura por janela foi ajustada para reutilizar a captura de **área visível**, em vez de `gdigrab(hwnd=...)`. Para vídeo do Chrome, mantenha a janela aberta e na mesma posição, sem cobri-la. O gravador minimiza automaticamente ao iniciar. [Detalhes e teste](README_V21.md).
+Selecionar uma janela do Chrome podia produzir vídeo vazio/preto porque o capturador GDI por `HWND` não é confiável para aplicações aceleradas. A correção utiliza a área visível correspondente à janela, com captura do desktop. O aplicativo se minimiza ao iniciar e retomar. **Mantenha a janela visível e na mesma posição durante a gravação.** [Detalhes e testes](README_V21.md).
 
-Prévia em `fix/captura-janela-chrome`, sem substituir `main`.
+Este ajuste está em uma branch de homologação e não altera a versão estável da `main`.
 
 ## GravadorTelaWin 2.1 — prévia RC1 (desempenho)
 
