@@ -1,21 +1,21 @@
-> **Versão estável:** GravadorTelaWin 2.2 Estúdio, homologada no Windows e integrada à branch `main`.
-> **Nova prévia:** [GravadorTelaWin 2.3 RC1](README_V23.md) acrescenta halo do cursor, cliques destacados, lupa 2× e anotações (caneta, seta e retângulo). Estes efeitos são opcionais e ainda requerem teste real no Windows.
+> **Versão estável: GravadorTelaWin 2.3 RC2.** Desenho validado no Windows, incluindo correção da camada que recebe cliques. Integrado na branch `main`.
+> **Próxima prévia: GravadorTelaWin 2.4 RC1.** Barra flutuante com cores, espessuras e histórico desfazer/refazer. Consulte [README_V24.md](README_V24.md). Os recursos novos aguardam homologação real.
 
 # Aplicativos Windows — GravadorTelaWin e Janela no Topo
 
 Este repositório reúne ferramentas de uso local para Windows 10 e 11.
 
-## GravadorTelaWin 2.1.1 — prévia com correção para Chrome
+## Histórico: GravadorTelaWin 2.1.1 — correção para Chrome
 
 Selecionar uma janela do Chrome podia produzir vídeo vazio/preto porque o capturador GDI por `HWND` não é confiável para aplicações aceleradas. A correção utiliza a área visível correspondente à janela, com captura do desktop. O aplicativo se minimiza ao iniciar e retomar. **Mantenha a janela visível e na mesma posição durante a gravação.** [Detalhes e testes](README_V21.md).
 
-Este ajuste está em uma branch de homologação e não altera a versão estável da `main`.
+Este ajuste foi integrado à versão estável durante a evolução do projeto.
 
 ## GravadorTelaWin 2.1 — prévia RC1 (desempenho)
 
 [**Novidades da v2.1**](README_V21.md): aceleração H.264 por GPU com autoteste e fallback de CPU, perfis de gravação, FPS real, velocidade do encoder, espaço livre e encerramento preventivo.
 
-O código continua em **branch separada** para preservar a versão estável da `main`. Esta é uma versão de teste, e o uso de GPU depende de driver e suporte do FFmpeg no PC. Aceleração de GPU não garante FPS maior em todos os casos.
+Esta seção descreve o ciclo de testes da v2.1. Esta é uma versão de teste, e o uso de GPU depende de driver e suporte do FFmpeg no PC. Aceleração de GPU não garante FPS maior em todos os casos.
 
 **Download:** [Actions](../../actions), rotina **Testar e compilar GravadorTelaWin 2.1**, artefato `GravadorTelaWin-v2.1-PREVIA-Windows-x64` após a compilação bem-sucedida.
 
@@ -23,7 +23,7 @@ O código continua em **branch separada** para preservar a versão estável da `
 
 A [documentação da versão 2.0](README_V2.md) apresenta as mudanças mais recentes: pré-visualização, gravação de janela individual, níveis de áudio, proteção e recuperação de gravações interrompidas e finalização atômica em MP4.
 
-> **Esta versão é de validação.** A v1.3 permanece a referência que já funcionou no Windows. O teste automático de compilação não garante que captura, áudio e seleção de janelas funcionem em todos os computadores.
+> **Registro histórico da prévia 2.0.** A versão atual está descrita no início deste README. O teste automático de compilação não garante que captura, áudio e seleção de janelas funcionem em todos os computadores.
 
 **Download do executável de prévia:** abra [GitHub Actions](../../actions), selecione **Testar e compilar GravadorTelaWin 2.0** e baixe o artefato `GravadorTelaWin-v2-PREVIA-Windows-x64` após uma execução concluída.
 

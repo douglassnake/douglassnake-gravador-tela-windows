@@ -1,3 +1,16 @@
+## 2.4.0-rc1 — barra flutuante, cores e undo/redo (prévia)
+
+- Barra flutuante sobre a área gravada, arrastável e visível apenas durante o desenho.
+- Cinco cores e três espessuras para caneta, seta e retângulo.
+- Histórico reversível: desfazer, refazer e limpar (limpeza pode ser desfeita); Ctrl+Alt+U/Y.
+- Preserva a camada de captura do mouse corrigida na RC2 e o pipeline de Chrome/áudio da versão homologada.
+- Testes locais e compilação automática de prévia em branch separada.
+
+## 2.3.0-rc2 — desenho homologado no Windows
+
+- Corrigida a captura de cliques durante o desenho com camada de entrada temporária de baixa opacidade.
+- Usuário confirmou desenho funcionando; RC2 integrada à main.
+
 ## 2.3.0-rc1 — efeitos visuais opcionais (23/11/2026)
 
 - Halo do cursor e indicador de clique esquerdo sobrepostos à área visível gravada.

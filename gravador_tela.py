@@ -44,7 +44,7 @@ from gravador_v23_overlay import (
     StudioOverlay, CaptureBounds, ANNOTATION_TOOLS,
 )
 
-APP_NAME = "GravadorTelaWin 2.3 RC2 (Estúdio)"
+APP_NAME = "GravadorTelaWin 2.4 RC1 (Estúdio)"
 RATE = 48_000
 
 
@@ -557,6 +557,8 @@ class GlobalShortcuts:
             (205, ord("Z"), "toggle_zoom", MOD_CONTROL | MOD_ALT),
             (206, ord("D"), "toggle_draw", MOD_CONTROL | MOD_ALT),
             (207, ord("E"), "clear_draw", MOD_CONTROL | MOD_ALT),
+            (208, ord("U"), "undo_draw", MOD_CONTROL | MOD_ALT),
+            (209, ord("Y"), "redo_draw", MOD_CONTROL | MOD_ALT),
         ]
         registered = []
         for ident, key, _, modifiers in ids:
@@ -629,7 +631,7 @@ class App(tk.Tk):
 
         main = tk.Frame(self, bg="#111827", padx=23, pady=18)
         main.pack(fill="both", expand=True)
-        tk.Label(main, text="GRAVADOR DE TELA • ESTÚDIO V2.3 RC1", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
+        tk.Label(main, text="GRAVADOR DE TELA • ESTÚDIO V2.4 RC1", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
         tk.Label(main, text="Windows 10/11  •  MP4  •  Captura local, sem envio para a nuvem",
                  font=("Segoe UI", 10), bg="#111827", fg="#9ca3af").pack(anchor="w", pady=(1, 17))
 
@@ -738,7 +740,7 @@ class App(tk.Tk):
         self.annotation_combo = ttk.Combobox(controls, textvariable=self.annotation_var,
             values=ANNOTATION_TOOLS, state="readonly", style="Dark.TCombobox", width=16)
         self.annotation_combo.grid(row=9, column=3, sticky="ew")
-        self.studio_status = tk.StringVar(value="Efeitos desligados • Desenho Ctrl+Alt+D • Limpar Ctrl+Alt+E")
+        self.studio_status = tk.StringVar(value="Desenho Ctrl+Alt+D • Desfazer Ctrl+Alt+U • Refazer Ctrl+Alt+Y • Limpar Ctrl+Alt+E")
         tk.Label(controls, textvariable=self.studio_status, bg="#1d293a", fg="#9ca3af",
                  font=("Segoe UI", 9)).grid(row=10, column=0, columnspan=4, sticky="w", pady=(5, 0))
 
@@ -779,7 +781,7 @@ class App(tk.Tk):
                  font=("Consolas", 10)).pack(anchor="w", pady=(8, 0))
         self.elapsed_var = tk.StringVar(value="00:00:00")
         tk.Label(foot, textvariable=self.elapsed_var, bg="#111827", fg="white", font=("Consolas", 16, "bold")).pack(side="right")
-        tk.Label(main, text="Ctrl+Shift+R/P: gravar/pausar  •  Ctrl+Alt+H/C/Z: halo/cliques/lupa  •  Ctrl+Alt+D/E: desenhar/limpar",
+        tk.Label(main, text="Ctrl+Shift+R/P: gravar/pausar  •  Ctrl+Alt+D: desenhar  •  Ctrl+Alt+U/Y: desfazer/refazer  •  E: limpar",
                  bg="#111827", fg="#8391a4", font=("Segoe UI", 9)).pack(anchor="w", pady=(12, 0))
 
     def _refresh_cameras(self) -> None:
@@ -985,7 +987,7 @@ class App(tk.Tk):
         self.studio_draw_mode = False
 
     def _visual_shortcut(self, action: str) -> None:
-        if self.state != "recording" and not (self.state == "paused" and action == "clear_draw"):
+        if self.state != "recording" and not (self.state == "paused" and action in ("clear_draw", "undo_draw", "redo_draw")):
             return
         if action in ("toggle_highlight", "toggle_clicks", "toggle_zoom"):
             variable = {"toggle_highlight": self.highlight_var,
@@ -1009,6 +1011,10 @@ class App(tk.Tk):
             overlay.set_drawing(self.studio_draw_mode)
         elif action == "clear_draw":
             overlay.clear()
+        elif action == "undo_draw":
+            overlay.undo()
+        elif action == "redo_draw":
+            overlay.redo()
         self.studio_status.set(
             f"Halo: {'ON' if self.highlight_var.get() else 'OFF'}  •  "
             f"Cliques: {'ON' if self.clicks_var.get() else 'OFF'}  •  "
@@ -1217,7 +1223,7 @@ class App(tk.Tk):
                     if data == "toggle_pause" and self.state in ("recording", "paused"):
                         self._pause_action()
                     if data in ("toggle_highlight", "toggle_clicks", "toggle_zoom",
-                                "toggle_draw", "clear_draw"):
+                                "toggle_draw", "clear_draw", "undo_draw", "redo_draw"):
                         self._visual_shortcut(data)
         except queue.Empty:
             pass
