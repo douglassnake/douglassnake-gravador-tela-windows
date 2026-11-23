@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Estúdio 2.3: cursor destacado, lupa local e anotações sobre a área visível.
+"""Estúdio 2.4: efeitos, anotações reversíveis e barra de ferramentas.
 
 Este módulo só cria janelas quando explicitamente ativado. Sem hook de teclado,
 acesso remoto ou instalação de drivers. O Windows é a única plataforma suportada
@@ -13,6 +13,9 @@ import sys
 import tkinter as tk
 from dataclasses import dataclass
 from PIL import ImageGrab, ImageTk
+from gravador_v24_history import (
+    AnnotationHistory, HistoryChange, ANNOTATION_COLORS, STROKE_WIDTHS,
+)
 
 TRANSPARENT = '#ff00ff'
 # Camada de entrada minimamente visível: alpha > 0 permite hit-test no Windows.
@@ -97,7 +100,9 @@ class StudioOverlay:
     """
     def __init__(self, parent: tk.Tk, bounds: CaptureBounds, *,
                  highlight: bool = False, clicks: bool = False,
-                 zoom: bool = False, tool: str = 'Caneta'):
+                 zoom: bool = False, tool: str = 'Caneta',
+                 color: str = 'Amarelo', stroke_width: int = 4,
+                 on_tool_changed=None):
         if sys.platform != 'win32':
             raise RuntimeError('Efeitos visuais disponíveis apenas no Windows')
         if tool not in ANNOTATION_TOOLS:
@@ -108,6 +113,15 @@ class StudioOverlay:
         self.clicks = bool(clicks)
         self.zoom = bool(zoom)
         self.tool = tool
+        self.color_name = color if color in ANNOTATION_COLORS else 'Amarelo'
+        self.stroke_width = stroke_width if stroke_width in STROKE_WIDTHS else 4
+        self.on_tool_changed = on_tool_changed
+        self.active_tool: str | None = None
+        self.history = AnnotationHistory()
+        self.toolbar_window: tk.Toplevel | None = None
+        self.toolbar_buttons: dict[str, tk.Button] = {}
+        self.toolbar_position: tuple[int, int] | None = None
+        self.toolbar_drag_anchor: tuple[int, int] | None = None
         self.drawing = False
         self.visible = True
         self.closed = False
@@ -216,6 +230,7 @@ class StudioOverlay:
         self.input_canvas = surface
         # O overlay visual deve ficar em cima do escudo e permanecer click-through.
         self._place()
+        self._show_toolbar()
 
     def _position_input_layer(self, shield: tk.Toplevel) -> None:
         api = ctypes.windll.user32
@@ -229,6 +244,7 @@ class StudioOverlay:
                          SWP_NOACTIVATE | SWP_SHOWWINDOW)
 
     def _hide_input_layer(self) -> None:
+        self._hide_toolbar()
         window = self.input_window
         self.input_window = None
         self.input_canvas = None
@@ -257,6 +273,21 @@ class StudioOverlay:
         if name not in ANNOTATION_TOOLS:
             raise ValueError('Ferramenta de anotação inválida')
         self.tool = name
+        if self.on_tool_changed is not None:
+            self.on_tool_changed(name)
+        self._refresh_toolbar_buttons()
+
+    def set_color(self, name: str) -> None:
+        if name not in ANNOTATION_COLORS:
+            raise ValueError('Cor de anotação inválida')
+        self.color_name = name
+        self._refresh_toolbar_buttons()
+
+    def set_stroke_width(self, value: int) -> None:
+        if value not in STROKE_WIDTHS:
+            raise ValueError('Espessura de anotação inválida')
+        self.stroke_width = value
+        self._refresh_toolbar_buttons()
 
     def set_drawing(self, enabled: bool) -> None:
         self.drawing = bool(enabled)
@@ -268,17 +299,158 @@ class StudioOverlay:
             self._hide_input_layer()
             self.anchor = None
             self.active_item = None
+            self.active_tool = None
         self.canvas.itemconfigure(self.mode_text,
             state='normal' if self.drawing else 'hidden')
 
+    def _apply_history(self, change: HistoryChange) -> None:
+        for item in change.show:
+            self.canvas.itemconfigure(item, state='normal')
+        for item in change.hide:
+            self.canvas.itemconfigure(item, state='hidden')
+        for item in change.delete:
+            self.canvas.delete(item)
+        self._refresh_toolbar_buttons()
+
     def clear(self) -> None:
-        """Remove apenas desenhos, preservando halo e a lupa."""
-        for item in self.canvas.find_all():
-            if item not in (self.halo, self.ring, self.mode_text, self.zoom_item,
-                            self.zoom_frame, self.zoom_caption):
-                self.canvas.delete(item)
+        """Limpa em uma etapa que pode ser desfeita (Ctrl+Alt+U)."""
+        self._apply_history(self.history.clear())
         self.active_item = None
         self.anchor = None
+        self.active_tool = None
+
+    def undo(self) -> None:
+        self._apply_history(self.history.undo())
+
+    def redo(self) -> None:
+        self._apply_history(self.history.redo())
+
+    @staticmethod
+    def toolbar_origin(bounds: CaptureBounds, width: int = 560,
+                       height: int = 82) -> tuple[int, int]:
+        # Os retângulos podem iniciar em monitores com coordenadas negativas.
+        return (bounds.x + max(4, bounds.width - width - 12), bounds.y + 12)
+
+    def _show_toolbar(self) -> None:
+        """Barra topmost somente no modo desenho. Não altera o fluxo FFmpeg."""
+        if self.closed or not self.visible or not self.drawing:
+            return
+        if self.toolbar_window is not None:
+            self._raise_toolbar()
+            return
+        panel = tk.Toplevel(self.parent)
+        panel.withdraw()
+        panel.overrideredirect(True)
+        panel.configure(bg='#142235')
+        panel.wm_attributes('-topmost', True)
+        panel.wm_attributes('-alpha', 0.96)
+        panel.geometry('560x82+0+0')
+        outer = tk.Frame(panel, bg='#142235', padx=7, pady=5)
+        outer.pack(fill='both', expand=True)
+        top = tk.Frame(outer, bg='#142235')
+        top.pack(fill='x')
+        grip = tk.Label(top, text='✎  DESENHO  ⋮⋮', fg='#d5e7ff', bg='#142235',
+                        font=('Segoe UI', 9, 'bold'), cursor='fleur')
+        grip.pack(side='left', padx=(2, 7))
+        grip.bind('<ButtonPress-1>', self._start_toolbar_drag)
+        grip.bind('<B1-Motion>', self._move_toolbar)
+        for name in ANNOTATION_TOOLS:
+            self._toolbar_button(top, 'tool:'+name, name, lambda name=name: self.set_tool(name))
+        self._toolbar_button(top, 'exit', 'Sair ✕', lambda: self.set_drawing(False))
+        bottom = tk.Frame(outer, bg='#142235')
+        bottom.pack(fill='x', pady=(5, 0))
+        for name, code in ANNOTATION_COLORS.items():
+            btn = tk.Button(bottom, text='●', fg=code, bg='#26394f',
+                            activebackground='#425d79', relief='flat',
+                            font=('Segoe UI', 12, 'bold'), width=2,
+                            command=lambda name=name: self.set_color(name))
+            btn.pack(side='left', padx=2)
+            self.toolbar_buttons['color:'+name] = btn
+        for width in STROKE_WIDTHS:
+            self._toolbar_button(bottom, 'width:'+str(width), str(width)+'px',
+                                 lambda width=width: self.set_stroke_width(width))
+        self._toolbar_button(bottom, 'undo', '↶', self.undo)
+        self._toolbar_button(bottom, 'redo', '↷', self.redo)
+        self._toolbar_button(bottom, 'clear', 'Limpar', self.clear)
+        panel.update_idletasks()
+        panel.deiconify()
+        self.toolbar_window = panel
+        self.toolbar_position = self.toolbar_origin(self.bounds)
+        self._raise_toolbar()
+        self._refresh_toolbar_buttons()
+
+    def _toolbar_button(self, frame: tk.Frame, key: str, label: str, command) -> None:
+        button = tk.Button(frame, text=label, command=command,
+                           bg='#26394f', fg='#ffffff', activebackground='#425d79',
+                           activeforeground='white', font=('Segoe UI', 9),
+                           relief='flat', padx=5, pady=2, cursor='hand2')
+        button.pack(side='left', padx=2)
+        self.toolbar_buttons[key] = button
+
+    def _refresh_toolbar_buttons(self) -> None:
+        for key, button in self.toolbar_buttons.items():
+            selected = (key == 'tool:'+self.tool or
+                        key == 'color:'+self.color_name or
+                        key == 'width:'+str(self.stroke_width))
+            button.configure(bg='#227a9f' if selected else '#26394f')
+            if key == 'undo':
+                button.configure(state='normal' if self.history.can_undo else 'disabled')
+            if key == 'redo':
+                button.configure(state='normal' if self.history.can_redo else 'disabled')
+
+    def _raise_toolbar(self) -> None:
+        panel = self.toolbar_window
+        if panel is None:
+            return
+        x, y = self.toolbar_position or self.toolbar_origin(self.bounds)
+        self._position_toolbar(panel, x, y)
+        panel.lift()
+        panel.wm_attributes('-topmost', True)
+
+    @staticmethod
+    def _position_toolbar(panel: tk.Toplevel, x: int, y: int) -> None:
+        if sys.platform != 'win32':
+            panel.geometry(f'+{max(0,x)}+{max(0,y)}')
+            return
+        # Coordenadas absolutas: geometria Tk com x negativo significa
+        # distancia da borda DIREITA, não coordenada do monitor esquerdo.
+        api = ctypes.windll.user32
+        api.GetAncestor.argtypes = [wintypes.HWND, ctypes.c_uint]
+        api.GetAncestor.restype = wintypes.HWND
+        raw = int(panel.winfo_id())
+        hwnd = int(api.GetAncestor(wintypes.HWND(raw), 2) or raw)
+        api.SetWindowPos(wintypes.HWND(hwnd), wintypes.HWND(HWND_TOPMOST),
+                         int(x), int(y), 560, 82,
+                         SWP_NOACTIVATE | SWP_SHOWWINDOW)
+
+    def _start_toolbar_drag(self, event) -> None:
+        self.toolbar_drag_anchor = (event.x_root, event.y_root)
+
+    def _move_toolbar(self, event) -> None:
+        if self.toolbar_window is None or self.toolbar_drag_anchor is None:
+            return
+        x, y = self.toolbar_position or self.toolbar_origin(self.bounds)
+        dx = event.x_root - self.toolbar_drag_anchor[0]
+        dy = event.y_root - self.toolbar_drag_anchor[1]
+        # Evita mover a barra inteiramente para fora da área capturada.
+        right = self.bounds.x + max(0, self.bounds.width - 80)
+        bottom = self.bounds.y + max(0, self.bounds.height - 35)
+        x = min(max(self.bounds.x, x + dx), right)
+        y = min(max(self.bounds.y, y + dy), bottom)
+        self.toolbar_position = (x, y)
+        self.toolbar_drag_anchor = (event.x_root, event.y_root)
+        self._raise_toolbar()
+
+    def _hide_toolbar(self) -> None:
+        panel = getattr(self, 'toolbar_window', None)
+        self.toolbar_window = None
+        self.toolbar_buttons = {}
+        self.toolbar_drag_anchor = None
+        if panel is not None:
+            try:
+                panel.destroy()
+            except tk.TclError:
+                pass
 
     def pause(self) -> None:
         self.visible = False
@@ -304,22 +476,25 @@ class StudioOverlay:
         if not self.drawing:
             return
         self.anchor = (event.x, event.y)
-        if self.tool == 'Caneta':
+        self.active_tool = self.tool
+        color = ANNOTATION_COLORS[self.color_name]
+        width = self.stroke_width
+        if self.active_tool == 'Caneta':
             self.active_item = self.canvas.create_line(event.x, event.y, event.x + 1,
-                                                       event.y + 1, fill='#ffed65',
-                                                       width=4, capstyle='round', smooth=True)
-        elif self.tool == 'Seta':
+                                                       event.y + 1, fill=color,
+                                                       width=width, capstyle='round', smooth=True)
+        elif self.active_tool == 'Seta':
             self.active_item = self.canvas.create_line(event.x, event.y, event.x + 1,
-                                                       event.y + 1, fill='#ffed65',
-                                                       width=4, arrow='last', arrowshape=(14, 18, 7))
+                                                       event.y + 1, fill=color, width=width,
+                                                       arrow='last', arrowshape=(14, 18, 7))
         else:
-            self.active_item = self.canvas.create_rectangle(event.x, event.y, event.x + 1,
-                                                            event.y + 1, outline='#ffed65', width=4)
+            self.active_item = self.canvas.create_rectangle(event.x, event.y,
+                             event.x + 1, event.y + 1, outline=color, width=width)
 
     def _drag(self, event) -> None:
         if not self.drawing or self.active_item is None or self.anchor is None:
             return
-        if self.tool == 'Caneta':
+        if self.active_tool == 'Caneta':
             self.canvas.coords(self.active_item,
                                *self.canvas.coords(self.active_item), event.x, event.y)
         else:
@@ -328,8 +503,10 @@ class StudioOverlay:
     def _release(self, event) -> None:
         if self.active_item is not None:
             self._drag(event)
+            self._apply_history(self.history.record(self.active_item))
         self.anchor = None
         self.active_item = None
+        self.active_tool = None
 
     def _poll(self) -> None:
         if self.closed:

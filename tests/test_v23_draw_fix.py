@@ -22,6 +22,14 @@ class DrawingInputLayerTests(unittest.TestCase):
         o.active_item = None
         o.anchor = None
         o.tool = 'Caneta'
+        o.color_name = 'Amarelo'
+        o.stroke_width = 4
+        o.active_tool = None
+        o.on_tool_changed = None
+        o.toolbar_buttons = {}
+        o.toolbar_window = None
+        from gravador_v24_history import AnnotationHistory
+        o.history = AnnotationHistory()
         return o
 
     def test_toggling_drawing_keeps_visual_click_through_but_uses_input_shield(self):

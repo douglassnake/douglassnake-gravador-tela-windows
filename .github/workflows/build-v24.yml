@@ -1,0 +1,70 @@
+name: Testar e compilar GravadorTelaWin 2.4 Anotações RC1
+
+on:
+  push:
+    branches: [feature/gravador-v2-4-anotacoes]
+    paths:
+      - 'gravador_tela.py'
+      - 'gravador_v23_overlay.py'
+      - 'gravador_v24_history.py'
+      - 'gravador_v22_studio.py'
+      - 'gravador_v21_perf.py'
+      - 'gravador_v2_utils.py'
+      - 'INSTALAR.ps1'
+      - 'preparar_ambiente.py'
+      - 'requirements.txt'
+      - 'tests/**'
+      - '.github/workflows/build-v24.yml'
+  pull_request:
+    paths:
+      - 'gravador_tela.py'
+      - 'gravador_v23_overlay.py'
+      - 'gravador_v24_history.py'
+      - 'INSTALAR.ps1'
+      - 'preparar_ambiente.py'
+      - 'tests/**'
+      - '.github/workflows/build-v24.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-test-and-build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Instalar dependências
+        shell: pwsh
+        run: python -m pip install -r requirements.txt 'pyinstaller>=6,<7'
+      - name: Validar módulos e instalador
+        shell: pwsh
+        run: |
+          python -m compileall -q gravador_tela.py gravador_v2_utils.py gravador_v21_perf.py gravador_v22_studio.py gravador_v23_overlay.py gravador_v24_history.py preparar_ambiente.py verificar_python.py
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'INSTALAR.ps1').Path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+      - name: Testes automatizados de gravação e anotações
+        shell: pwsh
+        run: python -m unittest discover -s tests -p 'test_v*.py' -v
+      - name: Compilar prévia Windows
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name GravadorTelaWin_v2_4_ESTUDIO_RC1 --collect-all imageio_ffmpeg --collect-all soundcard --collect-all comtypes --hidden-import comtypes --hidden-import comtypes.client gravador_tela.py
+          if (!(Test-Path 'dist/GravadorTelaWin_v2_4_ESTUDIO_RC1.exe')) { throw 'Executável não gerado' }
+          Get-FileHash 'dist/GravadorTelaWin_v2_4_ESTUDIO_RC1.exe' -Algorithm SHA256
+      - name: Disponibilizar versão de validação
+        uses: actions/upload-artifact@v4
+        with:
+          name: GravadorTelaWin-v2.4-Anotacoes-RC1-Windows-x64
+          path: dist/GravadorTelaWin_v2_4_ESTUDIO_RC1.exe
+          if-no-files-found: error
+          retention-days: 30
