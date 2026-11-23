@@ -2,6 +2,14 @@
 
 Este repositório reúne ferramentas de uso local para Windows 10 e 11.
 
+## GravadorTelaWin 2.1 — prévia RC1 (desempenho)
+
+[**Novidades da v2.1**](README_V21.md): aceleração H.264 por GPU com autoteste e fallback de CPU, perfis de gravação, FPS real, velocidade do encoder, espaço livre e encerramento preventivo.
+
+O código continua em **branch separada** para preservar a versão estável da `main`. Esta é uma versão de teste, e o uso de GPU depende de driver e suporte do FFmpeg no PC. Aceleração de GPU não garante FPS maior em todos os casos.
+
+**Download:** [Actions](../../actions), rotina **Testar e compilar GravadorTelaWin 2.1**, artefato `GravadorTelaWin-v2.1-PREVIA-Windows-x64` após a compilação bem-sucedida.
+
 ## GravadorTelaWin 2.0 — prévia RC1
 
 A [documentação da versão 2.0](README_V2.md) apresenta as mudanças mais recentes: pré-visualização, gravação de janela individual, níveis de áudio, proteção e recuperação de gravações interrompidas e finalização atômica em MP4.
