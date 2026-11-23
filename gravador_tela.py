@@ -44,7 +44,7 @@ from gravador_v23_overlay import (
     StudioOverlay, CaptureBounds, ANNOTATION_TOOLS,
 )
 
-APP_NAME = "GravadorTelaWin 2.5 RC1 (Estúdio)"
+APP_NAME = "GravadorTelaWin 2.5 RC2 (Estúdio)"
 RATE = 48_000
 
 
@@ -545,35 +545,46 @@ class GlobalShortcuts:
         if self.thread:
             self.thread.join(timeout=1)
 
+    @staticmethod
+    def bindings() -> tuple[tuple[int, int, str, int, str], ...]:
+        """Tabela testável: atalho primário e F8 de contingência para desenho."""
+        MOD_CONTROL, MOD_SHIFT, MOD_ALT = 0x0002, 0x0004, 0x0001
+        return (
+            (201, ord("R"), "toggle_record", MOD_CONTROL | MOD_SHIFT, "Ctrl+Shift+R"),
+            (202, ord("P"), "toggle_pause", MOD_CONTROL | MOD_SHIFT, "Ctrl+Shift+P"),
+            (203, ord("H"), "toggle_highlight", MOD_CONTROL | MOD_ALT, "Ctrl+Alt+H"),
+            (204, ord("C"), "toggle_clicks", MOD_CONTROL | MOD_ALT, "Ctrl+Alt+C"),
+            (205, ord("Z"), "toggle_zoom", MOD_CONTROL | MOD_ALT, "Ctrl+Alt+Z"),
+            (206, ord("D"), "toggle_draw", MOD_CONTROL | MOD_ALT, "Ctrl+Alt+D"),
+            (207, ord("E"), "clear_draw", MOD_CONTROL | MOD_ALT, "Ctrl+Alt+E"),
+            (208, ord("U"), "undo_draw", MOD_CONTROL | MOD_ALT, "Ctrl+Alt+U"),
+            (209, ord("Y"), "redo_draw", MOD_CONTROL | MOD_ALT, "Ctrl+Alt+Y"),
+            (210, 0x77, "toggle_draw", 0, "F8"),
+        )
+
     def _worker(self) -> None:
         from ctypes import wintypes
         user32 = ctypes.windll.user32
-        MOD_CONTROL, MOD_SHIFT, MOD_ALT, MOD_NOREPEAT = 0x0002, 0x0004, 0x0001, 0x4000
-        ids = [
-            (201, ord("R"), "toggle_record", MOD_CONTROL | MOD_SHIFT),
-            (202, ord("P"), "toggle_pause", MOD_CONTROL | MOD_SHIFT),
-            (203, ord("H"), "toggle_highlight", MOD_CONTROL | MOD_ALT),
-            (204, ord("C"), "toggle_clicks", MOD_CONTROL | MOD_ALT),
-            (205, ord("Z"), "toggle_zoom", MOD_CONTROL | MOD_ALT),
-            (206, ord("D"), "toggle_draw", MOD_CONTROL | MOD_ALT),
-            (207, ord("E"), "clear_draw", MOD_CONTROL | MOD_ALT),
-            (208, ord("U"), "undo_draw", MOD_CONTROL | MOD_ALT),
-            (209, ord("Y"), "redo_draw", MOD_CONTROL | MOD_ALT),
-        ]
+        ids = self.bindings()
         registered = []
-        for ident, key, _, modifiers in ids:
-            if user32.RegisterHotKey(None, ident, modifiers | MOD_NOREPEAT, key):
+        failures = []
+        actions_by_id = {ident: action for ident, _, action, _, _ in ids}
+        for ident, key, _action, modifiers, label in ids:
+            if user32.RegisterHotKey(None, ident, modifiers | 0x4000, key):
                 registered.append(ident)
-        if len(registered) < len(ids):
-            self.events.put(("warning", "Um atalho global já está sendo usado por outro aplicativo."))
+            else:
+                failures.append(label)
+        self.events.put(("shortcut_status", {
+            "primary_draw": 206 in registered,
+            "fallback_draw": 210 in registered,
+            "failed": tuple(failures),
+        }))
         msg = wintypes.MSG()
         try:
             while not self.stop.is_set():
                 while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0x0001):
-                    if msg.message == 0x0312:  # WM_HOTKEY
-                        for ident, _, action, _ in ids:
-                            if msg.wParam == ident:
-                                self.events.put(("shortcut", action))
+                    if msg.message == 0x0312 and int(msg.wParam) in registered:
+                        self.events.put(("shortcut", actions_by_id[int(msg.wParam)]))
                 time.sleep(0.045)
         finally:
             for ident in registered:
@@ -584,7 +595,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("985x975")
+        self.geometry("1010x990")
         self.minsize(855, 810)
         self.configure(bg="#111827")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -631,7 +642,7 @@ class App(tk.Tk):
 
         main = tk.Frame(self, bg="#111827", padx=23, pady=18)
         main.pack(fill="both", expand=True)
-        tk.Label(main, text="GRAVADOR DE TELA • ESTÚDIO V2.5 RC1", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
+        tk.Label(main, text="GRAVADOR DE TELA • ESTÚDIO V2.5 RC2", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
         tk.Label(main, text="Windows 10/11  •  MP4  •  Captura local, sem envio para a nuvem",
                  font=("Segoe UI", 10), bg="#111827", fg="#9ca3af").pack(anchor="w", pady=(1, 17))
 
@@ -740,7 +751,7 @@ class App(tk.Tk):
         self.annotation_combo = ttk.Combobox(controls, textvariable=self.annotation_var,
             values=ANNOTATION_TOOLS, state="readonly", style="Dark.TCombobox", width=16)
         self.annotation_combo.grid(row=9, column=3, sticky="ew")
-        self.studio_status = tk.StringVar(value="Desenho Ctrl+Alt+D • Desfazer Ctrl+Alt+U • Refazer Ctrl+Alt+Y • Limpar Ctrl+Alt+E")
+        self.studio_status = tk.StringVar(value="Desenhar: Ctrl+Alt+D ou F8 • botão ✎ na janela • Ctrl+Alt+U/Y desfazer/refazer")
         tk.Label(controls, textvariable=self.studio_status, bg="#1d293a", fg="#9ca3af",
                  font=("Segoe UI", 9)).grid(row=10, column=0, columnspan=4, sticky="w", pady=(5, 0))
 
@@ -771,6 +782,12 @@ class App(tk.Tk):
                                        bg="#25607e", fg="white", relief="flat", font=("Segoe UI", 9, "bold"),
                                        cursor="hand2", padx=10, pady=12)
         self.recover_button.pack(side="left", padx=(10, 0))
+        self.draw_button = tk.Button(action, text="✎ DESENHAR (F8)",
+                                     command=self._manual_draw_action,
+                                     bg="#18788c", fg="white", relief="flat",
+                                     font=("Segoe UI", 9, "bold"), cursor="hand2",
+                                     padx=8, pady=12, state="disabled")
+        self.draw_button.pack(side="left", padx=(10, 0))
 
         foot = tk.Frame(main, bg="#111827")
         foot.pack(fill="x", pady=(17, 0))
@@ -781,7 +798,7 @@ class App(tk.Tk):
                  font=("Consolas", 10)).pack(anchor="w", pady=(8, 0))
         self.elapsed_var = tk.StringVar(value="00:00:00")
         tk.Label(foot, textvariable=self.elapsed_var, bg="#111827", fg="white", font=("Consolas", 16, "bold")).pack(side="right")
-        tk.Label(main, text="Ctrl+Shift+R/P: gravar/pausar  •  Ctrl+Alt+D: desenhar  •  Ctrl+Alt+U/Y: desfazer/refazer  •  E: limpar",
+        tk.Label(main, text="Ctrl+Shift+R/P: gravar/pausar  •  Ctrl+Alt+D ou F8: desenhar  •  U/Y: desfazer/refazer",
                  bg="#111827", fg="#8391a4", font=("Segoe UI", 9)).pack(anchor="w", pady=(12, 0))
 
     def _refresh_cameras(self) -> None:
@@ -986,6 +1003,15 @@ class App(tk.Tk):
         self.studio_overlay = None
         self.studio_draw_mode = False
 
+    def _manual_draw_action(self) -> None:
+        """Plano B acessível pela interface, sem depender de RegisterHotKey."""
+        if self.state != "recording":
+            self.studio_status.set("Inicie uma gravação antes de desenhar.")
+            return
+        self._visual_shortcut("toggle_draw")
+        if self.studio_draw_mode and self.engine is not None:
+            self._prepare_visible_window(self.engine.settings.area.hwnd)
+
     def _visual_shortcut(self, action: str) -> None:
         if self.state != "recording" and not (self.state == "paused" and action in ("clear_draw", "undo_draw", "redo_draw")):
             return
@@ -1007,8 +1033,21 @@ class App(tk.Tk):
         elif action == "toggle_zoom":
             overlay.set_zoom(self.zoom_var.get())
         elif action == "toggle_draw":
-            self.studio_draw_mode = not self.studio_draw_mode
-            overlay.set_drawing(self.studio_draw_mode)
+            requested = not self.studio_draw_mode
+            try:
+                overlay.set_drawing(requested)
+            except Exception as exc:
+                self.studio_draw_mode = False
+                try:
+                    overlay.set_drawing(False)
+                except Exception:
+                    pass
+                self.studio_status.set(f"Falha ao abrir desenho: {exc}")
+                if self.engine is not None:
+                    self.engine.warnings.append("Falha de desenho: " + str(exc))
+                return
+            self.studio_draw_mode = requested
+            self.draw_button.configure(text="✕ SAIR DO DESENHO" if requested else "✎ DESENHAR (F8)")
         elif action == "clear_draw":
             overlay.clear()
         elif action == "undo_draw":
@@ -1060,6 +1099,7 @@ class App(tk.Tk):
             self._overlay_start(self.engine.settings.area)
         self.pause_button.configure(text="Ⅱ  PAUSAR", state="normal")
         self.record_button.configure(state="normal")
+        self.draw_button.configure(state="normal")
         if self.engine and self.engine.settings.area.hwnd is not None:
             self.status_var.set("● Gravando janela visível (não cubra nem mova)")
         else:
@@ -1080,6 +1120,7 @@ class App(tk.Tk):
             self.lento_amostras = 0
             self.lento_avisado = False
             self.state = "starting"
+            self.draw_button.configure(state="disabled")
             self._set_config_enabled(False)
             self.record_button.configure(state="disabled")
             self.pause_button.configure(state="disabled")
@@ -1105,6 +1146,7 @@ class App(tk.Tk):
             if self.state == "recording":
                 self.recorded_sec += time.monotonic() - self.segment_started
             self.state = "saving"
+            self.draw_button.configure(state="disabled")
             self.status_var.set("Finalizando e salvando o arquivo MP4...")
             self.record_button.configure(state="disabled")
             self.pause_button.configure(state="disabled")
@@ -1114,6 +1156,7 @@ class App(tk.Tk):
         if self.state == "recording":
             self.recorded_sec += time.monotonic() - self.segment_started
             self.state = "processing_pause"
+            self.draw_button.configure(state="disabled")
             self.status_var.set("Pausando gravação...")
             self.pause_button.configure(state="disabled")
             self.record_button.configure(state="disabled")
@@ -1153,6 +1196,7 @@ class App(tk.Tk):
         self.status_var.set("Pronto para gravar")
         self.audio_levels.set("MIC: —    SISTEMA: —")
         self.performance_var.set("Codificador: aguardando   •   FPS: —   •   Disco: —")
+        self.draw_button.configure(state="disabled", text="✎ DESENHAR (F8)")
 
     def _poll(self) -> None:
         try:
@@ -1169,6 +1213,7 @@ class App(tk.Tk):
                     self._overlay_start(data.settings.area)
                     self.record_button.configure(text="■  ENCERRAR E SALVAR", bg="#c93543", state="normal")
                     self.pause_button.configure(state="normal")
+                    self.draw_button.configure(state="normal")
                     recording_label = "janela visível" if data.settings.area.hwnd is not None else "a tela"
                     self.status_var.set("● Gravando " + recording_label + " • " + data.encoder.label)
                 elif event == "start_error":
@@ -1181,6 +1226,7 @@ class App(tk.Tk):
                     if self.studio_overlay is not None:
                         self.studio_overlay.pause()
                     self.audio_levels.set("MIC: —    SISTEMA: —")
+                    self.draw_button.configure(state="disabled")
                     self.status_var.set("Ⅱ Gravação pausada")
                     self.pause_button.configure(text="▶  RETOMAR", state="normal")
                     self.record_button.configure(state="normal")
@@ -1224,6 +1270,16 @@ class App(tk.Tk):
                     self.webcam_button.configure(state="normal")
                     self.webcam_var.set(CAMERA_OFF)
                     self.status_var.set(f"Falha ao buscar webcams: {data}")
+                elif event == "shortcut_status":
+                    if not data["primary_draw"]:
+                        hint = ("Ctrl+Alt+D ocupado; pressione F8 ou use ✎ DESENHAR."
+                                if data["fallback_draw"] else
+                                "Atalhos de desenho indisponíveis; use o botão ✎ DESENHAR.")
+                        self.studio_status.set(hint)
+                        self.status_var.set(hint)
+                    elif data["failed"]:
+                        self.studio_status.set("Atalho de desenho ativo; outros indisponíveis: " +
+                                               ", ".join(data["failed"]))
                 elif event == "warning":
                     self.status_var.set(str(data))
                 elif event == "shortcut":
@@ -1233,12 +1289,20 @@ class App(tk.Tk):
                         self._pause_action()
                     if data in ("toggle_highlight", "toggle_clicks", "toggle_zoom",
                                 "toggle_draw", "clear_draw", "undo_draw", "redo_draw"):
-                        self._visual_shortcut(data)
+                        try:
+                            self._visual_shortcut(data)
+                        except Exception as exc:
+                            self.studio_status.set("Falha na ação de desenho: " + str(exc))
         except queue.Empty:
             pass
         self.after(120, self._poll)
 
     def _tick(self) -> None:
+        if self.state == "recording" and self.studio_overlay is not None:
+            actual = bool(self.studio_overlay.drawing)
+            if actual != self.studio_draw_mode:
+                self.studio_draw_mode = actual
+                self.draw_button.configure(text="✕ SAIR DO DESENHO" if actual else "✎ DESENHAR (F8)")
         seconds = self.recorded_sec
         if self.state == "recording":
             seconds += time.monotonic() - self.segment_started
