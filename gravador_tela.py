@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ctypes
 import datetime as dt
+import math
 import os
 import re
 import queue
@@ -28,7 +29,12 @@ import mss
 import numpy as np
 from PIL import Image, ImageGrab, ImageTk
 
-APP_NAME = "Gravador de Tela Windows"
+from gravador_v2_utils import (
+    enumerate_windows, window_info, find_recoverable_sessions,
+    write_session_manifest, recover_session,
+)
+
+APP_NAME = "GravadorTelaWin 2.0 (prévia)"
 RATE = 48_000
 
 
@@ -52,6 +58,7 @@ class Screen:
     y: int
     width: int
     height: int
+    hwnd: int | None = None  # HWND = captura da janela, não das coordenadas do desktop
 
 
 @dataclass
@@ -74,6 +81,7 @@ class AudioCapture:
         self.first_audio_at: float | None = None
         self.error: str | None = None
         self.frames = 0
+        self.level_dbfs: float | None = None
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, daemon=True, name=f"audio-{kind}")
 
@@ -131,6 +139,8 @@ class AudioCapture:
                             wav.setnchannels(nchannels)
                             self.first_audio_at = time.monotonic() - data.shape[0] / RATE
                         data = data[:, :nchannels]
+                        rms = float(np.sqrt(np.mean(np.square(data, dtype=np.float64))))
+                        self.level_dbfs = max(-60.0, min(0.0, 20.0 * math.log10(max(rms, 1e-9))))
                         pcm = (np.clip(data, -1.0, 1.0) * 32767.0).astype("<i2")
                         wav.writeframesraw(pcm.tobytes())
                         self.frames += len(data)
@@ -165,25 +175,29 @@ class RecordingEngine:
         self.segments: list[Segment] = []
         self.current: Segment | None = None
         self.warnings: list[str] = []
+        write_session_manifest(self.tempdir, fps=settings.fps, source=settings.area.name,
+                               audio=settings.mic or settings.system_audio)
 
     def _ffmpeg_command(self, path: Path) -> list[str]:
         a = self.settings.area
+        source = ["-i", f"hwnd={a.hwnd:#x}"] if a.hwnd is not None else [
+            "-offset_x", str(a.x), "-offset_y", str(a.y),
+            "-video_size", f"{a.width}x{a.height}", "-i", "desktop",
+        ]
         return [
             self.ffmpeg, "-hide_banner", "-loglevel", "warning", "-y",
             "-f", "gdigrab", "-framerate", str(self.settings.fps),
-            "-draw_mouse", "1",
-            "-offset_x", str(a.x), "-offset_y", str(a.y),
-            "-video_size", f"{a.width}x{a.height}",
-            "-i", "desktop", "-an", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "-draw_mouse", "1", *source,
+            "-an", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", str(self.settings.crf),
-            "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(path),
+            "-g", str(2 * self.settings.fps), "-pix_fmt", "yuv420p", str(path),
         ]
 
     def start_segment(self) -> None:
         if self.current is not None:
             raise RuntimeError("Já existe uma captura ativa.")
         idx = len(self.segments) + 1
-        video = self.tempdir / f"video_{idx:03d}.mp4"
+        video = self.tempdir / f"video_{idx:03d}.mkv"
         log_handle = (self.tempdir / f"ffmpeg_{idx:03d}.log").open("wb")
         try:
             process = subprocess.Popen(
@@ -288,7 +302,8 @@ class RecordingEngine:
     def _mux_segment(self, seg: Segment) -> Path:
         ready = self.tempdir / f"pronto_{seg.index:03d}.mp4"
         if not (self.settings.mic or self.settings.system_audio):
-            shutil.copy2(seg.video, ready)
+            self._run_ffmpeg([self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(seg.video),
+                              "-map", "0:v:0", "-an", "-c:v", "copy", "-movflags", "+faststart", str(ready)])
             return ready
 
         available = [a for a in seg.audio if a.valid]
@@ -348,8 +363,10 @@ class RecordingEngine:
             output = self.settings.folder / f"{base}_{i:03d}.mp4"
 
         ready = [self._mux_segment(seg) for seg in self.segments]
+        # Conclusão atômica: nunca deixar um arquivo final com nome .mp4 incompleto.
+        partial = output.with_suffix(".partial.mp4")
         if len(ready) == 1:
-            shutil.copy2(ready[0], output)
+            shutil.copy2(ready[0], partial)
         else:
             concat_file = self.tempdir / "trechos.txt"
             concat_file.write_text(
@@ -358,10 +375,11 @@ class RecordingEngine:
             self._run_ffmpeg([
                 self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
                 "-f", "concat", "-safe", "0", "-i", str(concat_file),
-                "-c", "copy", "-movflags", "+faststart", str(output),
+                "-c", "copy", "-movflags", "+faststart", str(partial),
             ])
-        if not output.is_file() or output.stat().st_size < 1000:
+        if not partial.is_file() or partial.stat().st_size < 1000:
             raise RuntimeError("O MP4 final não foi criado corretamente.")
+        os.replace(partial, output)
         shutil.rmtree(self.tempdir, ignore_errors=True)
         return output
 
@@ -486,8 +504,8 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("780x635")
-        self.minsize(690, 590)
+        self.geometry("925x765")
+        self.minsize(820, 700)
         self.configure(bg="#111827")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.events: queue.Queue = queue.Queue()
@@ -495,6 +513,8 @@ class App(tk.Tk):
         self.state = "idle"
         self.engine: RecordingEngine | None = None
         self.selected_area: Screen | None = None
+        self.window_lookup: dict[str, int] = {}
+        self.preview_photo: ImageTk.PhotoImage | None = None
         self.recorded_sec = 0.0
         self.segment_started = 0.0
         self.job_thread: threading.Thread | None = None
@@ -511,6 +531,8 @@ class App(tk.Tk):
         self.shortcuts.start()
         self.after(120, self._poll)
         self.after(250, self._tick)
+        self.after(900, self._refresh_preview)
+        self.after(1250, self._offer_recovery)
 
     def _build_ui(self) -> None:
         style = ttk.Style()
@@ -520,9 +542,9 @@ class App(tk.Tk):
         style.configure("Dark.TCheckbutton", background="#1d293a", foreground="white", font=("Segoe UI", 10))
         style.map("Dark.TCheckbutton", background=[("active", "#1d293a")], foreground=[("disabled", "#7f899b")])
 
-        main = tk.Frame(self, bg="#111827", padx=28, pady=24)
+        main = tk.Frame(self, bg="#111827", padx=23, pady=18)
         main.pack(fill="both", expand=True)
-        tk.Label(main, text="GRAVADOR DE TELA", font=("Segoe UI", 21, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
+        tk.Label(main, text="GRAVADOR DE TELA • V2.0", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
         tk.Label(main, text="Windows 10/11  •  MP4  •  Captura local, sem envio para a nuvem",
                  font=("Segoe UI", 10), bg="#111827", fg="#9ca3af").pack(anchor="w", pady=(1, 17))
 
@@ -540,8 +562,19 @@ class App(tk.Tk):
                                      relief="flat", cursor="hand2", padx=15, pady=8, font=("Segoe UI", 10, "bold"))
         self.area_button.grid(row=1, column=1, sticky="ew")
         self.area_label = tk.Label(box, text="", bg="#1d293a", fg="#9ca3af", font=("Segoe UI", 9))
-        self.area_label.grid(row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        self.area_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.refresh_windows_button = tk.Button(box, text="Atualizar lista de janelas", command=self._refresh_window_choices,
+                              bg="#334963", fg="white", relief="flat", cursor="hand2", padx=10, pady=6)
+        self.refresh_windows_button.grid(row=3, column=0, columnspan=2, sticky="w", pady=(9, 0))
+        preview_frame = tk.Frame(box, bg="#101928", padx=4, pady=4)
+        preview_frame.grid(row=1, column=2, rowspan=3, sticky="e", padx=(16, 0))
+        self.preview_label = tk.Label(preview_frame, text="PRÉVIA\nAguardando captura", width=33, height=9,
+                                      bg="#101928", fg="#9ca3af", font=("Segoe UI", 9))
+        self.preview_label.pack()
+        tk.Label(preview_frame, text="Prévia da área visível • 1 FPS aprox.", bg="#101928", fg="#94a3b8",
+                 font=("Segoe UI", 8)).pack(pady=(3, 0))
         box.columnconfigure(0, weight=1)
+        self._refresh_window_choices(keep_selection=False)
         self._update_area_label()
 
         controls = tk.Frame(main, bg="#1d293a", padx=20, pady=17)
@@ -567,6 +600,9 @@ class App(tk.Tk):
         controls.columnconfigure(0, weight=1)
         controls.columnconfigure(1, weight=1)
         controls.columnconfigure(2, weight=1)
+        self.audio_levels = tk.StringVar(value="MIC: —    SISTEMA: —")
+        tk.Label(controls, textvariable=self.audio_levels, bg="#1d293a", fg="#7cddc0",
+                 font=("Consolas", 10)).grid(row=4, column=0, columnspan=4, sticky="w", pady=(11, 0))
 
         paths = tk.Frame(main, bg="#1d293a", padx=20, pady=15)
         paths.pack(fill="x", pady=(12, 0))
@@ -582,7 +618,7 @@ class App(tk.Tk):
         self.browse_button.pack(side="right")
 
         action = tk.Frame(main, bg="#111827")
-        action.pack(fill="x", pady=(20, 0))
+        action.pack(fill="x", pady=(13, 0))
         self.record_button = tk.Button(action, text="●  INICIAR GRAVAÇÃO", command=self._record_action,
                                        bg="#dc3545", fg="white", activebackground="#bb2939", activeforeground="white",
                                        relief="flat", cursor="hand2", font=("Segoe UI", 12, "bold"), pady=12)
@@ -591,6 +627,10 @@ class App(tk.Tk):
                                       bg="#475569", fg="white", relief="flat", font=("Segoe UI", 11, "bold"),
                                       cursor="hand2", padx=18, pady=12, state="disabled")
         self.pause_button.pack(side="left")
+        self.recover_button = tk.Button(action, text="RECUPERAR VÍDEO", command=self._recover_dialog,
+                                       bg="#25607e", fg="white", relief="flat", font=("Segoe UI", 9, "bold"),
+                                       cursor="hand2", padx=10, pady=12)
+        self.recover_button.pack(side="left", padx=(10, 0))
 
         foot = tk.Frame(main, bg="#111827")
         foot.pack(fill="x", pady=(17, 0))
@@ -601,8 +641,84 @@ class App(tk.Tk):
         tk.Label(main, text="Atalhos globais: Ctrl + Shift + R  (iniciar/parar)   •   Ctrl + Shift + P  (pausar/retomar)",
                  bg="#111827", fg="#8391a4", font=("Segoe UI", 9)).pack(anchor="w", pady=(15, 0))
 
+    def _refresh_window_choices(self, keep_selection: bool = True) -> None:
+        previous = self.screen_var.get() if keep_selection else self.screens[1].name
+        self.window_lookup = {}
+        for target in enumerate_windows(exclude_title=APP_NAME):
+            label = f"Janela • {target.title[:66]} [{target.hwnd:#x}]"
+            self.window_lookup[label] = target.hwnd
+        values = [s.name for s in self.screens] + ["Área personalizada"] + list(self.window_lookup)
+        self.screen_combo.configure(values=values)
+        if previous not in values:
+            self.screen_var.set(self.screens[1].name)
+        if keep_selection:
+            self._update_area_label()
+
+    def _refresh_preview(self) -> None:
+        try:
+            if self.state in ("idle", "paused"):
+                area = self._selected_screen()
+                if area.hwnd is not None:
+                    target = window_info(area.hwnd)
+                    if target is None:
+                        raise RuntimeError("Janela indisponível ou minimizada")
+                    area = Screen(target.title, target.x, target.y, target.width, target.height, target.hwnd)
+                image = ImageGrab.grab(bbox=(area.x, area.y, area.x + area.width, area.y + area.height),
+                                       all_screens=True).convert("RGB")
+                image.thumbnail((235, 132), Image.Resampling.LANCZOS)
+                self.preview_photo = ImageTk.PhotoImage(image)
+                self.preview_label.configure(image=self.preview_photo, text="", width=235, height=132)
+        except Exception:
+            if self.state == "idle":
+                self.preview_label.configure(image="", text="Prévia indisponível", width=33, height=9)
+        finally:
+            self.after(1200, self._refresh_preview)
+
+    def _recover_dialog(self) -> None:
+        if self.state != "idle":
+            return
+        base = Path(self.folder_var.get().strip()).expanduser()
+        chosen = filedialog.askdirectory(title="Selecione a pasta gravador_tela_* para recuperar",
+                                         initialdir=str(base) if base.is_dir() else str(Path.home()))
+        if chosen:
+            self._start_recovery(Path(chosen))
+
+    def _offer_recovery(self) -> None:
+        if self.state != "idle":
+            return
+        base = Path(self.folder_var.get().strip()).expanduser()
+        sessions = find_recoverable_sessions(base)
+        if sessions and messagebox.askyesno("Sessão interrompida", f"Encontradas {len(sessions)} sessões com vídeo MKV.\n\n"
+                                               "Deseja tentar recuperar a sessão mais recente?\n"
+                                               "O áudio pode não estar disponível."):
+            self._start_recovery(sessions[0])
+
+    def _start_recovery(self, session: Path) -> None:
+        if self.state != "idle":
+            return
+        self.state = "recovering"
+        self._set_config_enabled(False)
+        self.record_button.configure(state="disabled")
+        self.pause_button.configure(state="disabled")
+        self.status_var.set("Recuperando trechos MKV, mantenha o programa aberto...")
+        destination = Path(self.folder_var.get().strip()).expanduser()
+        def work():
+            try:
+                ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+                dest = recover_session(ffmpeg, session, destination)
+                self.events.put(("recovered", dest))
+            except Exception as exc:
+                self.events.put(("recovery_error", str(exc)))
+        self.job_thread = threading.Thread(target=work, daemon=True, name="recuperacao")
+        self.job_thread.start()
+
     def _selected_screen(self) -> Screen:
         value = self.screen_var.get()
+        if value in self.window_lookup:
+            target = window_info(self.window_lookup[value])
+            if target is None:
+                raise ValueError("A janela foi fechada ou minimizada. Atualize a lista.")
+            return Screen(target.title, target.x, target.y, target.width, target.height, target.hwnd)
         if value == "Área personalizada":
             if self.selected_area is None:
                 raise ValueError("Clique em 'Selecionar área' para definir o recorte.")
@@ -657,11 +773,19 @@ class App(tk.Tk):
         for widget in [self.mic_check, self.sys_check, self.area_button, self.browse_button]:
             widget.configure(state="normal" if enabled else "disabled")
         self.folder_entry.configure(state="normal" if enabled else "disabled")
+        self.refresh_windows_button.configure(state="normal" if enabled else "disabled")
+        self.recover_button.configure(state="normal" if enabled else "disabled")
 
     def _record_action(self) -> None:
         if self.state == "idle":
             try:
-                self.engine = RecordingEngine(self._settings())
+                settings = self._settings()
+                if settings.area.hwnd is not None and window_info(settings.area.hwnd) is None:
+                    raise ValueError("A janela foi fechada ou minimizada. Selecione outra janela.")
+                settings.folder.mkdir(parents=True, exist_ok=True)
+                if shutil.disk_usage(settings.folder).free < 400 * 1024 * 1024:
+                    raise ValueError("Espaço insuficiente: libere pelo menos 400 MB no disco de gravação.")
+                self.engine = RecordingEngine(settings)
                 self.engine.start_segment()
             except Exception as exc:
                 tmp = self.engine.tempdir if self.engine else None
@@ -726,6 +850,7 @@ class App(tk.Tk):
         self.record_button.configure(text="●  INICIAR GRAVAÇÃO", bg="#dc3545", state="normal")
         self.pause_button.configure(text="Ⅱ  PAUSAR", state="disabled")
         self.status_var.set("Pronto para gravar")
+        self.audio_levels.set("MIC: —    SISTEMA: —")
 
     def _poll(self) -> None:
         try:
@@ -733,6 +858,7 @@ class App(tk.Tk):
                 event, data = self.events.get_nowait()
                 if event == "paused":
                     self.state = "paused"
+                    self.audio_levels.set("MIC: —    SISTEMA: —")
                     self.status_var.set("Ⅱ Gravação pausada")
                     self.pause_button.configure(text="▶  RETOMAR", state="normal")
                     self.record_button.configure(state="normal")
@@ -747,6 +873,14 @@ class App(tk.Tk):
                     msg, workdir = data
                     self._reset()
                     messagebox.showerror("Erro na gravação", f"{msg}\n\nArquivos temporários para recuperação:\n{workdir}")
+                elif event == "recovered":
+                    self._reset()
+                    self.status_var.set("Vídeo recuperado: " + data.name)
+                    messagebox.showinfo("Recuperação concluída", "Vídeo recuperado sem garantia de áudio:\n" + str(data) +
+                                        "\n\nA pasta original foi preservada para sua segurança.")
+                elif event == "recovery_error":
+                    self._reset()
+                    messagebox.showerror("Falha na recuperação", str(data))
                 elif event == "warning":
                     self.status_var.set(str(data))
                 elif event == "shortcut":
@@ -764,6 +898,12 @@ class App(tk.Tk):
             seconds += time.monotonic() - self.segment_started
         whole = int(seconds)
         self.elapsed_var.set(f"{whole // 3600:02d}:{whole // 60 % 60:02d}:{whole % 60:02d}")
+        if self.engine is not None and self.state == "recording" and self.engine.current:
+            values = {a.kind: a.level_dbfs for a in self.engine.current.audio}
+            def show(name):
+                v = values.get(name)
+                return "—" if v is None else f"{v:5.1f} dBFS"
+            self.audio_levels.set(f"MIC: {show('microfone')}    SISTEMA: {show('sistema')}")
         self.after(250, self._tick)
 
     def _on_close(self) -> None:

@@ -1,20 +1,20 @@
 # Histórico de versões
 
-## 1.3 (16/11/2026)
+## 2.0.0-rc1 — prévia
 
-- Localização robusta do Python x64 via Registro do Windows, pasta de programas, launcher `py.exe` e PATH.
-- Evita reinstalação de Python quando já existe versão compatível.
-- Melhora os logs para diagnosticar instalações em diretórios não previstos.
-- Execução local mesmo quando o pacote é aberto por compartilhamento de rede.
+- Captura de janela por HWND, seleção pela lista e atualização de janelas abertas.
+- Pré-visualização periódica da área visível sem prévia durante a gravação para reduzir interferência.
+- Indicadores de nível de áudio (dBFS) durante a gravação.
+- Segmentos MKV temporários com possibilidade de recuperação de vídeo após falhas.
+- Saída MP4 criada atomicamente via arquivo parcial.
+- Detecção de sessões recuperáveis; recuperação manual preservando a pasta de origem.
+- Verificação inicial de espaço livre (400 MB).
+- Testes automatizados e workflow separado de compilação Windows de prévia.
 
-## 1.2
+**Validação pendente:** captura efetiva de janelas e áudio, performance e gravações longas em máquinas Windows.
 
-- Instalador automático no perfil do usuário e preparação do ambiente local.
+## 1.3 — estável de referência
 
-## 1.1
-
-- Recuperação automática de ambientes virtuais que ficaram sem `pip`.
-
-## 1.0
-
-- Captura de tela, MP4, áudio e controles de gravação.
+- Correção da detecção de instalações Python já existentes no Windows.
+- Inicialização via instalador local e recuperação automática de pip.
+- Captura por monitor ou região, áudio do sistema/microfone, pausa, retomada e exportação MP4.

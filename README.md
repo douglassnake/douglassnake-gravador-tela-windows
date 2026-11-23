@@ -1,90 +1,33 @@
 # Aplicativos Windows — GravadorTelaWin e Janela no Topo
 
-Este repositório reúne dois aplicativos independentes para Windows 10/11.
+Este repositório reúne ferramentas de uso local para Windows 10 e 11.
+
+## GravadorTelaWin 2.0 — prévia RC1
+
+A [documentação da versão 2.0](README_V2.md) apresenta as mudanças mais recentes: pré-visualização, gravação de janela individual, níveis de áudio, proteção e recuperação de gravações interrompidas e finalização atômica em MP4.
+
+> **Esta versão é de validação.** A v1.3 permanece a referência que já funcionou no Windows. O teste automático de compilação não garante que captura, áudio e seleção de janelas funcionem em todos os computadores.
+
+**Download do executável de prévia:** abra [GitHub Actions](../../actions), selecione **Testar e compilar GravadorTelaWin 2.0** e baixe o artefato `GravadorTelaWin-v2-PREVIA-Windows-x64` após uma execução concluída.
+
+**Instalação alternativa:** baixe os arquivos desta branch, extraia e execute `INICIAR.bat`. Será preparado um ambiente Python local, caso necessário.
 
 ## Janela no Topo v1.0
 
-O [**Janela no Topo**](janela-no-topo/README.md) permite selecionar uma janela aberta e mantê-la sobre as demais. Oferece busca, seleção por clique em 5 segundos, fixar/desafixar várias janelas e atalho na Área de Trabalho.
+O [Janela no Topo](janela-no-topo/README.md) permite selecionar e fixar uma janela acima das demais. É independente do gravador; funciona com PowerShell e não requer Python.
 
-Para executar, baixe a pasta `janela-no-topo` (ou o artefato **JanelaNoTopo-Windows** disponível em [Actions](../../actions)), extraia os arquivos na mesma pasta e abra **`janela-no-topo/INICIAR.bat`**. Não requer Python nem internet. O artefato é um ZIP portátil, não um instalador `.exe`.
+## GravadorTelaWin — recursos compartilhados
 
-## GravadorTelaWin v1.3
+- Tela inteira, monitor ou área personalizada; MP4/H.264.
+- Microfone e áudio do computador, com pausa e retomada.
+- 15, 24, 30 e 60 FPS, perfis de qualidade, pasta de saída.
+- Atalhos globais: **Ctrl + Shift + R** (iniciar/encerrar), **Ctrl + Shift + P** (pausar/retomar).
+- Captura local: o aplicativo não envia vídeos à nuvem.
 
-Aplicativo de gravação de tela para **Windows 10 e 11 (64 bits)**, com interface gráfica em português. Grava vídeos em **MP4 (H.264)** e permite capturar áudio do microfone e/ou do computador.
+## Requisitos, suporte e transparência
 
-> **Versão estável de referência: 1.3.** A inicialização da versão 1.3 foi confirmada em teste de usuário no Windows. O executável produzido por compilação automática deve ser validado em um computador Windows antes de ser distribuído amplamente.
+O desenvolvimento usa Python, Tkinter, FFmpeg (distribuído via `imageio-ffmpeg`), MSS, Pillow, SoundCard/WASAPI e PyInstaller. O build automatizado gera um executável Windows sem instalar Python no computador de destino; o código pode ser iniciado com `INICIAR.bat` e instalação de dependências.
 
-## Recursos
+Diagnósticos e arquivos temporários podem conter dados do computador: **revise antes de compartilhá-los**. Não envie seus vídeos ou logs para um repositório público.
 
-- Captura da tela inteira, de um monitor específico ou de uma região selecionada.
-- Gravação local em MP4/H.264.
-- Áudio do microfone, áudio do computador (quando disponível) e combinação dos dois.
-- Pausa, retomada e finalização da gravação.
-- Opções de 15, 24, 30 e 60 FPS e ajuste de qualidade.
-- Atalhos de teclado: **Ctrl + Shift + R** para iniciar/parar; **Ctrl + Shift + P** para pausar/retomar.
-- Escolha da pasta de saída (padrão: `Vídeos\GravadorTela`).
-
-## Instalação no Windows (modo automático)
-
-1. Baixe os arquivos deste repositório: **Code → Download ZIP**.
-2. Extraia o ZIP para uma pasta. Pode estar em unidade de rede, mas o aplicativo copiará os arquivos necessários para o disco local.
-3. Clique duas vezes em **`INICIAR.bat`**.
-4. A versão 1.3 procura Python 3.11–3.13 x64 e, se necessário, instala Python 3.12.10 para o usuário atual a partir de `python.org`, verifica o instalador e prepara um ambiente virtual local.
-5. Na interface, escolha o monitor/área e clique para começar a gravar.
-
-A primeira instalação requer internet para baixar Python e as bibliotecas do PyPI. O aplicativo **não envia os vídeos gravados para servidores**; são salvos localmente na pasta selecionada.
-
-> **Avisos de segurança:** o arquivo `.exe` gerado localmente não é assinado digitalmente. O Windows pode exibir alerta do SmartScreen. Analise o código e confirme a procedência antes de executar. Grave conteúdo de terceiros somente com as autorizações aplicáveis.
-
-## Executável `.exe` independente
-
-No Windows, depois de configurar o aplicativo, execute **`GERAR_EXE.bat`**. O arquivo resultante estará em:
-
-```text
-%LOCALAPPDATA%\GravadorTelaWin\dist\GravadorTelaWin.exe
-```
-
-Também existe uma rotina em **GitHub Actions**: na aba **Actions**, execute `Build Windows EXE`, ou aguarde a compilação após uma atualização na branch `main`. O `.exe` aparece como *artefato* para baixar na execução da rotina. Esse artefato não é uma versão de lançamento (Release) assinada.
-
-## Publicação do projeto no GitHub e divulgação no X
-
-O projeto inclui dois assistentes para Windows:
-
-1. **`PUBLICAR_GITHUB.bat`**: prepara uma cópia local somente com arquivos aprovados, usa o GitHub CLI (`gh`) e publica o projeto no repositório **público** `douglassnake/douglassnake-gravador-tela-windows`. Exige **Git**, **GitHub CLI** e autenticação na conta `douglassnake` pelo navegador. Se faltarem ferramentas, o script indica como instalá-las. Não salva tokens nem incorpora vídeos e logs ao repositório.
-2. **`ABRIR_PUBLICACAO_X.bat`**: depois que o README estiver acessível no GitHub, abre a tela de publicação do X.com com um texto pronto. **O post não é enviado automaticamente**; revise e clique em Publicar no X.
-
-O repositório oficial já está disponível em [GitHub](https://github.com/douglassnake/douglassnake-gravador-tela-windows). O script de publicação por GitHub CLI é opcional; para futuras atualizações, use uma cópia clonada do repositório, preservando o histórico existente.
-
-Não publique o link do GitHub nem divulgue um `.exe` antes de confirmar que o repositório e a compilação estão disponíveis. O **GitHub Actions** disponibiliza o executável como artefato; ele não é automaticamente um instalador assinado ou uma Release.
-
-## Diagnóstico de problemas
-
-Execute `DIAGNOSTICO.bat` e consulte:
-
-```text
-%LOCALAPPDATA%\GravadorTelaWin\diagnostico_completo.txt
-```
-
-**Não publique diagnósticos sem revisar:** eles podem conter nomes de usuário, caminhos de rede e outras informações sobre o computador.
-
-## Estrutura
-
-| Arquivo | Finalidade |
-| --- | --- |
-| `gravador_tela.py` | Interface e mecanismo de captura de vídeo/áudio. |
-| `INSTALAR.ps1` | Detecção e preparação do Python no Windows. |
-| `preparar_ambiente.py` | Criação/recuperação do ambiente virtual e compilação. |
-| `verificar_python.py` | Validação dos componentes de Python. |
-| `INICIAR.bat` | Inicia a instalação ou abre o programa. |
-| `GERAR_EXE.bat` | Compila o executável com PyInstaller. |
-| `DIAGNOSTICO.bat` | Reúne informações de diagnóstico. |
-| `PUBLICAR_GITHUB.bat` | Publica os arquivos aprovados em um repositório público. |
-| `ABRIR_PUBLICACAO_X.bat` | Abre o rascunho da divulgação no X.com. |
-
-## Tecnologias
-
-Python, Tkinter, FFmpeg (via `imageio-ffmpeg`), MSS, SoundCard/WASAPI, NumPy, Pillow e PyInstaller (somente para compilação).
-
-## Licença
-
-Distribuído sob a licença [MIT](LICENSE). As dependências e o FFmpeg possuem licenças próprias; verifique seus termos antes de redistribuir builds binários.
+Licença do projeto: [MIT](LICENSE); dependências possuem termos próprios.
