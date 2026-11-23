@@ -40,8 +40,11 @@ from gravador_v21_perf import (
 from gravador_v22_studio import (
     CAMERA_OFF, list_webcams, studio_video_flags, multi_audio_mux_command,
 )
+from gravador_v23_overlay import (
+    StudioOverlay, CaptureBounds, ANNOTATION_TOOLS,
+)
 
-APP_NAME = "GravadorTelaWin 2.2 RC1 (Estúdio)"
+APP_NAME = "GravadorTelaWin 2.3 RC1 (Estúdio)"
 RATE = 48_000
 
 
@@ -524,7 +527,7 @@ class RegionSelector:
 
 
 class GlobalShortcuts:
-    """Hotkeys globais de Windows: Ctrl+Shift+R e Ctrl+Shift+P."""
+    """Hotkeys de gravação e de efeitos visuais opcionais no Windows."""
 
     def __init__(self, events: queue.Queue):
         self.events = events
@@ -545,11 +548,19 @@ class GlobalShortcuts:
     def _worker(self) -> None:
         from ctypes import wintypes
         user32 = ctypes.windll.user32
-        MOD_CONTROL, MOD_SHIFT, MOD_NOREPEAT = 0x0002, 0x0004, 0x4000
-        ids = [(201, ord("R"), "toggle_record"), (202, ord("P"), "toggle_pause")]
+        MOD_CONTROL, MOD_SHIFT, MOD_ALT, MOD_NOREPEAT = 0x0002, 0x0004, 0x0001, 0x4000
+        ids = [
+            (201, ord("R"), "toggle_record", MOD_CONTROL | MOD_SHIFT),
+            (202, ord("P"), "toggle_pause", MOD_CONTROL | MOD_SHIFT),
+            (203, ord("H"), "toggle_highlight", MOD_CONTROL | MOD_ALT),
+            (204, ord("C"), "toggle_clicks", MOD_CONTROL | MOD_ALT),
+            (205, ord("Z"), "toggle_zoom", MOD_CONTROL | MOD_ALT),
+            (206, ord("D"), "toggle_draw", MOD_CONTROL | MOD_ALT),
+            (207, ord("E"), "clear_draw", MOD_CONTROL | MOD_ALT),
+        ]
         registered = []
-        for ident, key, _ in ids:
-            if user32.RegisterHotKey(None, ident, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, key):
+        for ident, key, _, modifiers in ids:
+            if user32.RegisterHotKey(None, ident, modifiers | MOD_NOREPEAT, key):
                 registered.append(ident)
         if len(registered) < len(ids):
             self.events.put(("warning", "Um atalho global já está sendo usado por outro aplicativo."))
@@ -558,7 +569,7 @@ class GlobalShortcuts:
             while not self.stop.is_set():
                 while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0x0001):
                     if msg.message == 0x0312:  # WM_HOTKEY
-                        for ident, _, action in ids:
+                        for ident, _, action, _ in ids:
                             if msg.wParam == ident:
                                 self.events.put(("shortcut", action))
                 time.sleep(0.045)
@@ -571,8 +582,8 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("985x870")
-        self.minsize(855, 770)
+        self.geometry("985x975")
+        self.minsize(855, 810)
         self.configure(bg="#111827")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.events: queue.Queue = queue.Queue()
@@ -590,6 +601,8 @@ class App(tk.Tk):
         self.job_thread: threading.Thread | None = None
         self.lento_amostras = 0
         self.lento_avisado = False
+        self.studio_overlay: StudioOverlay | None = None
+        self.studio_draw_mode = False
 
         with mss.mss() as sct:
             virtual = sct.monitors[0]
@@ -616,7 +629,7 @@ class App(tk.Tk):
 
         main = tk.Frame(self, bg="#111827", padx=23, pady=18)
         main.pack(fill="both", expand=True)
-        tk.Label(main, text="GRAVADOR DE TELA • ESTÚDIO V2.2 RC1", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
+        tk.Label(main, text="GRAVADOR DE TELA • ESTÚDIO V2.3 RC1", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
         tk.Label(main, text="Windows 10/11  •  MP4  •  Captura local, sem envio para a nuvem",
                  font=("Segoe UI", 10), bg="#111827", fg="#9ca3af").pack(anchor="w", pady=(1, 17))
 
@@ -706,6 +719,29 @@ class App(tk.Tk):
         tk.Label(controls, textvariable=self.audio_levels, bg="#1d293a", fg="#7cddc0",
                  font=("Consolas", 10)).grid(row=7, column=0, columnspan=4, sticky="w", pady=(9, 0))
 
+        tk.Label(controls, text="EFEITOS NA GRAVAÇÃO (opcionais)", bg="#1d293a", fg="#8ebeff",
+                 font=("Segoe UI", 10, "bold")).grid(row=8, column=0, columnspan=4,
+                                                       sticky="w", pady=(10, 4))
+        self.highlight_var = tk.BooleanVar(value=False)
+        self.clicks_var = tk.BooleanVar(value=False)
+        self.zoom_var = tk.BooleanVar(value=False)
+        self.highlight_check = ttk.Checkbutton(controls, text="Halo do cursor",
+            variable=self.highlight_var, style="Dark.TCheckbutton")
+        self.highlight_check.grid(row=9, column=0, sticky="w")
+        self.clicks_check = ttk.Checkbutton(controls, text="Destacar cliques",
+            variable=self.clicks_var, style="Dark.TCheckbutton")
+        self.clicks_check.grid(row=9, column=1, sticky="w")
+        self.zoom_check = ttk.Checkbutton(controls, text="Lupa 2×",
+            variable=self.zoom_var, style="Dark.TCheckbutton")
+        self.zoom_check.grid(row=9, column=2, sticky="w")
+        self.annotation_var = tk.StringVar(value="Caneta")
+        self.annotation_combo = ttk.Combobox(controls, textvariable=self.annotation_var,
+            values=ANNOTATION_TOOLS, state="readonly", style="Dark.TCombobox", width=16)
+        self.annotation_combo.grid(row=9, column=3, sticky="ew")
+        self.studio_status = tk.StringVar(value="Efeitos desligados • Desenho Ctrl+Alt+D • Limpar Ctrl+Alt+E")
+        tk.Label(controls, textvariable=self.studio_status, bg="#1d293a", fg="#9ca3af",
+                 font=("Segoe UI", 9)).grid(row=10, column=0, columnspan=4, sticky="w", pady=(5, 0))
+
         paths = tk.Frame(main, bg="#1d293a", padx=20, pady=15)
         paths.pack(fill="x", pady=(12, 0))
         tk.Label(paths, text="SALVAR GRAVAÇÕES EM", bg="#1d293a", fg="#8ebeff", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 7))
@@ -743,8 +779,8 @@ class App(tk.Tk):
                  font=("Consolas", 10)).pack(anchor="w", pady=(8, 0))
         self.elapsed_var = tk.StringVar(value="00:00:00")
         tk.Label(foot, textvariable=self.elapsed_var, bg="#111827", fg="white", font=("Consolas", 16, "bold")).pack(side="right")
-        tk.Label(main, text="Atalhos globais: Ctrl + Shift + R  (iniciar/parar)   •   Ctrl + Shift + P  (pausar/retomar)",
-                 bg="#111827", fg="#8391a4", font=("Segoe UI", 9)).pack(anchor="w", pady=(15, 0))
+        tk.Label(main, text="Ctrl+Shift+R/P: gravar/pausar  •  Ctrl+Alt+H/C/Z: halo/cliques/lupa  •  Ctrl+Alt+D/E: desenhar/limpar",
+                 bg="#111827", fg="#8391a4", font=("Segoe UI", 9)).pack(anchor="w", pady=(12, 0))
 
     def _refresh_cameras(self) -> None:
         """Busca dispositivos sem bloquear o Tkinter. Não abre a webcam."""
@@ -901,14 +937,83 @@ class App(tk.Tk):
     def _set_config_enabled(self, enabled: bool) -> None:
         readonly = "readonly" if enabled else "disabled"
         for widget in [self.screen_combo, self.fps_combo, self.quality_combo,
-                       self.profile_combo, self.encoder_combo, self.webcam_combo]:
+                       self.profile_combo, self.encoder_combo, self.webcam_combo,
+                       self.annotation_combo]:
             widget.configure(state=readonly)
         for widget in [self.mic_check, self.sys_check, self.separate_tracks_check,
-                       self.webcam_button, self.area_button, self.browse_button]:
+                       self.webcam_button, self.area_button, self.browse_button,
+                       self.highlight_check, self.clicks_check, self.zoom_check]:
             widget.configure(state="normal" if enabled else "disabled")
         self.folder_entry.configure(state="normal" if enabled else "disabled")
         self.refresh_windows_button.configure(state="normal" if enabled else "disabled")
         self.recover_button.configure(state="normal" if enabled else "disabled")
+
+    def _overlay_start(self, area: Screen) -> None:
+        """Erros de efeito nunca podem interromper a gravação principal."""
+        self._overlay_stop()
+        self.studio_draw_mode = False
+        if not (self.highlight_var.get() or self.clicks_var.get() or self.zoom_var.get()):
+            # O desenho continua disponível sob demanda, por atalho.
+            return
+        self._overlay_ensure(area)
+
+    def _overlay_ensure(self, area: Screen | None = None) -> None:
+        if self.studio_overlay is not None:
+            return
+        if area is None:
+            if self.engine is None:
+                return
+            area = self.engine.settings.area
+        try:
+            self.studio_overlay = StudioOverlay(self,
+                CaptureBounds(area.x, area.y, area.width, area.height),
+                highlight=self.highlight_var.get(), clicks=self.clicks_var.get(),
+                zoom=self.zoom_var.get(), tool=self.annotation_var.get())
+        except Exception as exc:
+            self.studio_overlay = None
+            self.studio_status.set(f"Efeitos indisponíveis: {exc}")
+            if self.engine is not None:
+                self.engine.warnings.append("Efeitos visuais indisponíveis: " + str(exc))
+
+    def _overlay_stop(self) -> None:
+        if self.studio_overlay is not None:
+            try:
+                self.studio_overlay.close()
+            except tk.TclError:
+                pass
+        self.studio_overlay = None
+        self.studio_draw_mode = False
+
+    def _visual_shortcut(self, action: str) -> None:
+        if self.state != "recording" and not (self.state == "paused" and action == "clear_draw"):
+            return
+        if action in ("toggle_highlight", "toggle_clicks", "toggle_zoom"):
+            variable = {"toggle_highlight": self.highlight_var,
+                        "toggle_clicks": self.clicks_var,
+                        "toggle_zoom": self.zoom_var}[action]
+            variable.set(not variable.get())
+        self._overlay_ensure()
+        overlay = self.studio_overlay
+        if overlay is None:
+            return
+        if self.state == "paused":
+            overlay.pause()
+        if action == "toggle_highlight":
+            overlay.set_highlight(self.highlight_var.get())
+        elif action == "toggle_clicks":
+            overlay.set_clicks(self.clicks_var.get())
+        elif action == "toggle_zoom":
+            overlay.set_zoom(self.zoom_var.get())
+        elif action == "toggle_draw":
+            self.studio_draw_mode = not self.studio_draw_mode
+            overlay.set_drawing(self.studio_draw_mode)
+        elif action == "clear_draw":
+            overlay.clear()
+        self.studio_status.set(
+            f"Halo: {'ON' if self.highlight_var.get() else 'OFF'}  •  "
+            f"Cliques: {'ON' if self.clicks_var.get() else 'OFF'}  •  "
+            f"Lupa: {'ON' if self.zoom_var.get() else 'OFF'}  •  "
+            f"Desenho: {'ON' if self.studio_draw_mode else 'OFF'}")
 
     def _prepare_visible_window(self, hwnd: int | None) -> None:
         """Remove o próprio gravador da frente e dá foco à janela selecionada.
@@ -943,6 +1048,10 @@ class App(tk.Tk):
             return
         self.segment_started = time.monotonic()
         self.state = "recording"
+        if self.studio_overlay is not None:
+            self.studio_overlay.resume()
+        else:
+            self._overlay_start(self.engine.settings.area)
         self.pause_button.configure(text="Ⅱ  PAUSAR", state="normal")
         self.record_button.configure(state="normal")
         if self.engine and self.engine.settings.area.hwnd is not None:
@@ -1029,6 +1138,7 @@ class App(tk.Tk):
         self.job_thread.start()
 
     def _reset(self) -> None:
+        self._overlay_stop()
         self.state = "idle"
         self.engine = None
         self._set_config_enabled(True)
@@ -1050,6 +1160,7 @@ class App(tk.Tk):
                     self.snapshot_last = 0.0
                     self.last_disk_warning = False
                     self.state = "recording"
+                    self._overlay_start(data.settings.area)
                     self.record_button.configure(text="■  ENCERRAR E SALVAR", bg="#c93543", state="normal")
                     self.pause_button.configure(state="normal")
                     recording_label = "janela visível" if data.settings.area.hwnd is not None else "a tela"
@@ -1061,6 +1172,8 @@ class App(tk.Tk):
                     messagebox.showerror("Não foi possível iniciar", f"{msg}\n\nArquivos temporários: {tmp or 'não criados'}")
                 elif event == "paused":
                     self.state = "paused"
+                    if self.studio_overlay is not None:
+                        self.studio_overlay.pause()
                     self.audio_levels.set("MIC: —    SISTEMA: —")
                     self.status_var.set("Ⅱ Gravação pausada")
                     self.pause_button.configure(text="▶  RETOMAR", state="normal")
@@ -1103,6 +1216,9 @@ class App(tk.Tk):
                         self._record_action()
                     if data == "toggle_pause" and self.state in ("recording", "paused"):
                         self._pause_action()
+                    if data in ("toggle_highlight", "toggle_clicks", "toggle_zoom",
+                                "toggle_draw", "clear_draw"):
+                        self._visual_shortcut(data)
         except queue.Empty:
             pass
         self.after(120, self._poll)
@@ -1170,6 +1286,7 @@ class App(tk.Tk):
         if self.state != "idle":
             messagebox.showinfo("Gravação em andamento", "Encerre e salve a gravação antes de fechar o aplicativo.")
             return
+        self._overlay_stop()
         self.shortcuts.close()
         self.destroy()
 

@@ -1,4 +1,5 @@
-> **Atenção:** esta branch é uma prévia experimental. Os testes de fluidez e de áudio dependem de um Windows real. Consulte [README_V21.md](README_V21.md) para as novidades da v2.1.2.
+> **Versão estável:** GravadorTelaWin 2.2 Estúdio, homologada no Windows e integrada à branch `main`.
+> **Nova prévia:** [GravadorTelaWin 2.3 RC1](README_V23.md) acrescenta halo do cursor, cliques destacados, lupa 2× e anotações (caneta, seta e retângulo). Estes efeitos são opcionais e ainda requerem teste real no Windows.
 
 # Aplicativos Windows — GravadorTelaWin e Janela no Topo
 
