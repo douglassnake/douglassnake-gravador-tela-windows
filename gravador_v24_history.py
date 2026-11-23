@@ -82,6 +82,15 @@ class AnnotationHistory:
         self._visible.add(item_id)
         return HistoryChange(delete=garbage)
 
+    def erase(self, ids: tuple[int, ...] | list[int]) -> HistoryChange:
+        """Oculta itens existentes em um unico gesto reversivel de borracha."""
+        candidates = tuple(sorted(set(ids) & self._visible))
+        if not candidates:
+            return HistoryChange()
+        garbage = self._append(_Action('erase', candidates))
+        self._visible.difference_update(candidates)
+        return HistoryChange(hide=candidates, delete=garbage)
+
     def clear(self) -> HistoryChange:
         if not self._visible:
             return HistoryChange()

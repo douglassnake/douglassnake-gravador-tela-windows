@@ -10,7 +10,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$Versao = '2.4.0-rc1'
+$Versao = '2.5.0-rc1'
 $PastaOrigem = $PSScriptRoot
 $PastaLocal = Join-Path $env:LOCALAPPDATA 'GravadorTelaWin'
 $PastaPython = Join-Path $PastaLocal 'Runtime\Python312'
@@ -36,7 +36,7 @@ function Registrar([string]$Mensagem) {
 function Copiar-Programa() {
     Registrar "Origem: $PastaOrigem"
     Registrar "Destino local: $PastaLocal"
-    foreach ($nome in @('gravador_tela.py','gravador_v2_utils.py','gravador_v21_perf.py','gravador_v22_studio.py','gravador_v23_overlay.py','gravador_v24_history.py','preparar_ambiente.py','requirements.txt','verificar_python.py')) {
+    foreach ($nome in @('gravador_tela.py','gravador_v2_utils.py','gravador_v21_perf.py','gravador_v22_studio.py','gravador_v23_overlay.py','gravador_v24_history.py','gravador_v25_export.py','preparar_ambiente.py','requirements.txt','verificar_python.py')) {
         $origem = Join-Path $PastaOrigem $nome
         $destino = Join-Path $PastaLocal $nome
         if (-not (Test-Path -LiteralPath $origem -PathType Leaf)) {
@@ -263,7 +263,7 @@ try {
         throw "Preparacao falhou com codigo $retorno. Consulte o diagnostico."
     }
     if ($Acao -eq 'GerarEXE') {
-        Registrar "Executavel criado em: $(Join-Path $PastaLocal 'dist\GravadorTelaWin_v2_4_ESTUDIO_RC1.exe')"
+        Registrar "Executavel criado em: $(Join-Path $PastaLocal 'dist\GravadorTelaWin_v2_5_ESTUDIO_RC1.exe')"
     }
     else { Registrar 'Aplicativo iniciado a partir do disco local.' }
     Registrar 'RESULTADO: OK'

@@ -151,7 +151,7 @@ class OverlayTests(unittest.TestCase):
 
     def test_invalid_inputs(self):
         o=self.make()
-        for fn, value in ((o.set_tool,'Borracha'),(o.set_color,'Marrom'),(o.set_stroke_width,13)):
+        for fn, value in ((o.set_tool,'Inexistente'),(o.set_color,'Marrom'),(o.set_stroke_width,13)):
             with self.assertRaises(ValueError): fn(value)
         self.assertEqual(STROKE_WIDTHS,(2,4,7))
 

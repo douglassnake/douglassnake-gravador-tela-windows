@@ -44,7 +44,7 @@ from gravador_v23_overlay import (
     StudioOverlay, CaptureBounds, ANNOTATION_TOOLS,
 )
 
-APP_NAME = "GravadorTelaWin 2.4 RC1 (Estúdio)"
+APP_NAME = "GravadorTelaWin 2.5 RC1 (Estúdio)"
 RATE = 48_000
 
 
@@ -631,7 +631,7 @@ class App(tk.Tk):
 
         main = tk.Frame(self, bg="#111827", padx=23, pady=18)
         main.pack(fill="both", expand=True)
-        tk.Label(main, text="GRAVADOR DE TELA • ESTÚDIO V2.4 RC1", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
+        tk.Label(main, text="GRAVADOR DE TELA • ESTÚDIO V2.5 RC1", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
         tk.Label(main, text="Windows 10/11  •  MP4  •  Captura local, sem envio para a nuvem",
                  font=("Segoe UI", 10), bg="#111827", fg="#9ca3af").pack(anchor="w", pady=(1, 17))
 
@@ -1186,6 +1186,15 @@ class App(tk.Tk):
                     self.record_button.configure(state="normal")
                 elif event == "finished":
                     path, warnings = data
+                    # A interface ainda está viva: salvar anotações no mesmo diretório
+                    # do MP4 antes de destruir a camada visual. Falha de sidecar
+                    # jamais invalida o vídeo concluído.
+                    if self.studio_overlay is not None and self.studio_overlay.history.visible:
+                        try:
+                            self.studio_overlay.save_annotations(
+                                path.with_name(path.stem + '_anotacoes.png'))
+                        except (OSError, ValueError, MemoryError) as exc:
+                            warnings.append('Anotações não exportadas: ' + str(exc))
                     self._reset()
                     self.deiconify()
                     self.status_var.set(f"Salvo: {path.name}")

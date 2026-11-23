@@ -71,7 +71,7 @@ class V23OverlayTests(unittest.TestCase):
         self.assertGreater(bottom, 500)
 
     def test_valid_annotation_tools(self):
-        self.assertEqual(set(ANNOTATION_TOOLS), {'Caneta', 'Seta', 'Retângulo'})
+        self.assertTrue({'Caneta', 'Seta', 'Retângulo'} <= set(ANNOTATION_TOOLS))
 
     def test_no_overlay_on_non_windows(self):
         # Não cria janela de gravação fora do Windows.
