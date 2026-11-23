@@ -44,7 +44,7 @@ from gravador_v23_overlay import (
     StudioOverlay, CaptureBounds, ANNOTATION_TOOLS,
 )
 
-APP_NAME = "GravadorTelaWin 2.3 RC1 (Estúdio)"
+APP_NAME = "GravadorTelaWin 2.3 RC2 (Estúdio)"
 RATE = 48_000
 
 
