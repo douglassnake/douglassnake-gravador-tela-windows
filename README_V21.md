@@ -1,3 +1,13 @@
+# Correção 2.1.1 RC — Chrome (23/11/2026)
+
+Ao selecionar uma janela do Chrome, o FFmpeg `gdigrab` por `hwnd` podia registrar apenas vídeo preto ou sem imagem. O modo corrigido usa o **recorte visível do desktop** calculado a partir da janela, como já funcionava em "Selecionar área". O aplicativo minimiza a si próprio e tenta trazer a janela escolhida para a frente ao iniciar ou retomar.
+
+**Teste no Windows:** selecionar Chrome, clicar Gravar, navegar por 20 segundos sem cobrir nem mover a janela e encerrar com **Ctrl+Shift+R**. Conferir imagem e áudio no MP4 final. Teste também seleção manual de área, pausa, retomada e captura de monitor.
+
+**Limitação:** a janela deve permanecer visível, sem ser coberta, minimizada ou movida durante a gravação. Janelas protegidas por DRM podem continuar indisponíveis. Captura de janelas ocultas demandará integração futura com Windows.Graphics.Capture. O código passou em testes automatizados locais, mas a captura real do Chrome exige homologação no Windows.
+
+---
+
 # GravadorTelaWin 2.1 RC1 — desempenho
 
 Versão de prévia da evolução do GravadorTelaWin. **Não substitui a v1.3 que já funcionou no Windows.**

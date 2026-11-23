@@ -1,8 +1,8 @@
-name: Testar e compilar GravadorTelaWin 2.1
+name: Testar e compilar GravadorTelaWin 2.1.1 (Chrome)
 
 on:
   push:
-    branches: [feature/gravador-v2-1]
+    branches: [feature/gravador-v2-1, fix/captura-janela-chrome]
     paths:
       - 'gravador_tela.py'
       - 'gravador_v2_utils.py'
@@ -65,14 +65,14 @@ jobs:
       - name: Criar executável de prévia
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name GravadorTelaWin_v2_1_PREVIA --collect-all imageio_ffmpeg --collect-all soundcard --collect-all comtypes --hidden-import comtypes --hidden-import comtypes.client gravador_tela.py
-          if (!(Test-Path 'dist/GravadorTelaWin_v2_1_PREVIA.exe')) { throw 'Executável não gerado' }
-          Get-FileHash 'dist/GravadorTelaWin_v2_1_PREVIA.exe' -Algorithm SHA256
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name GravadorTelaWin_v2_1_Chrome_PREVIA --collect-all imageio_ffmpeg --collect-all soundcard --collect-all comtypes --hidden-import comtypes --hidden-import comtypes.client gravador_tela.py
+          if (!(Test-Path 'dist/GravadorTelaWin_v2_1_Chrome_PREVIA.exe')) { throw 'Executável não gerado' }
+          Get-FileHash 'dist/GravadorTelaWin_v2_1_Chrome_PREVIA.exe' -Algorithm SHA256
 
       - name: Disponibilizar prévia para validação
         uses: actions/upload-artifact@v4
         with:
-          name: GravadorTelaWin-v2.1-PREVIA-Windows-x64
-          path: dist/GravadorTelaWin_v2_1_PREVIA.exe
+          name: GravadorTelaWin-v2.1.1-Chrome-PREVIA-Windows-x64
+          path: dist/GravadorTelaWin_v2_1_Chrome_PREVIA.exe
           if-no-files-found: error
           retention-days: 30

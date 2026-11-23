@@ -106,7 +106,7 @@ class EnginePipelineTests(unittest.TestCase):
             info = subprocess.run([ffmpeg, '-hide_banner', '-i', str(destination)], capture_output=True, text=True)
             self.assertIn('Video:', info.stderr)
 
-    def test_ffmpeg_windows_capture_command_with_hwnd(self):
+    def test_ffmpeg_window_capture_uses_visible_desktop_region(self):
         import sys, types
         if 'mss' not in sys.modules:
             try:
@@ -118,8 +118,9 @@ class EnginePipelineTests(unittest.TestCase):
         engine.ffmpeg = 'ffmpeg.exe'
         engine.settings = app.Settings(app.Screen('Bloco de notas',0,0,640,480, hwnd=0x1234),30,23,False,False,Path('Z:/'))
         command = engine._ffmpeg_command(Path('video_001.mkv'))
-        self.assertIn('hwnd=0x1234', command)
-        self.assertNotIn('desktop', command)
+        self.assertIn('desktop', command)
+        self.assertIn('640x480', command)
+        self.assertNotIn('hwnd=', ' '.join(command))
         self.assertIn('video_001.mkv', command)
         engine.settings = app.Settings(app.Screen('Monitor 1',-1920,0,1920,1080),30,23,False,False,Path('Z:/'))
         cmd = engine._ffmpeg_command(Path('video_002.mkv'))

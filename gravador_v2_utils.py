@@ -83,6 +83,29 @@ def enumerate_windows(exclude_title: str = "") -> list[WindowTarget]:
     return entries[:150]
 
 
+def visible_window_rect(window: WindowTarget, desktop: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    """Recorta a janela aos pixels visíveis do desktop virtual."""
+    dx, dy, dw, dh = (int(value) for value in desktop)
+    if dw <= 0 or dh <= 0:
+        raise ValueError("Área de trabalho inválida para captura.")
+    x0 = max(int(window.x), dx)
+    y0 = max(int(window.y), dy)
+    x1 = min(int(window.x) + int(window.width), dx + dw)
+    y1 = min(int(window.y) + int(window.height), dy + dh)
+    if x1 - x0 < 64 or y1 - y0 < 64:
+        raise ValueError("A janela selecionada não está visível em área suficiente da tela. "
+                         "Restaure a janela e mantenha-a dentro do monitor.")
+    return x0, y0, x1 - x0, y1 - y0
+
+
+def desktop_capture_args(x: int, y: int, width: int, height: int) -> list[str]:
+    """Reutiliza gdigrab -i desktop, que funciona no modo seleção de área."""
+    if width < 64 or height < 64:
+        raise ValueError("A região de vídeo precisa ter ao menos 64 x 64 pixels.")
+    return ["-offset_x", str(x), "-offset_y", str(y),
+            "-video_size", f"{width}x{height}", "-i", "desktop"]
+
+
 def find_recoverable_sessions(folder: Path) -> list[Path]:
     """List only v2 working directories with usable MKV media; never delete them."""
     if not folder.is_dir():
