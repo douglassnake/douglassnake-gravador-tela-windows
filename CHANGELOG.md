@@ -1,5 +1,19 @@
 # Histórico de versões
 
+## 2.1.0-rc1 — desempenho (prévia)
+
+- Escolha de codificador H.264: automático, CPU (libx264), NVIDIA NVENC, Intel Quick Sync e AMD AMF.
+- Teste real de codificação antes de selecionar a GPU; seleção automática usa CPU quando não há GPU funcional.
+- Inicialização da gravação em thread para não travar a interface enquanto a GPU é testada.
+- Quatro perfis de FPS/qualidade: equilibrado, alta qualidade, arquivo menor e fluido (60 FPS).
+- Indicadores de FPS efetivos, velocidade do FFmpeg e espaço livre no disco.
+- Registro periódico de `desempenho.json` na pasta temporária da sessão (dados técnicos locais).
+- Reserva conservadora de espaço para exportação e encerramento preventivo se o espaço ficar insuficiente.
+- Testes automatizados da seleção de encoder, fallback, leitura de telemetria e exportação de vídeo.
+
+**Pendente:** homologação real em Windows 10/11 com GPUs NVIDIA, Intel e AMD; os testes locais não comprovam ganho de desempenho.
+
+
 ## 2.0.0-rc1 — prévia
 
 - Captura de janela por HWND, seleção pela lista e atualização de janelas abertas.

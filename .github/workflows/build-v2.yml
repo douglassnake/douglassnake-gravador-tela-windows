@@ -1,11 +1,12 @@
-name: Testar e compilar GravadorTelaWin 2.0
+name: Testar e compilar GravadorTelaWin 2.1
 
 on:
   push:
-    branches: [feature/gravador-v2]
+    branches: [feature/gravador-v2-1]
     paths:
       - 'gravador_tela.py'
       - 'gravador_v2_utils.py'
+      - 'gravador_v21_perf.py'
       - 'INSTALAR.ps1'
       - 'preparar_ambiente.py'
       - 'requirements.txt'
@@ -15,6 +16,7 @@ on:
     paths:
       - 'gravador_tela.py'
       - 'gravador_v2_utils.py'
+      - 'gravador_v21_perf.py'
       - 'INSTALAR.ps1'
       - 'preparar_ambiente.py'
       - 'requirements.txt'
@@ -42,7 +44,7 @@ jobs:
       - name: Verificar código e instalador
         shell: pwsh
         run: |
-          python -m compileall -q gravador_tela.py gravador_v2_utils.py preparar_ambiente.py verificar_python.py
+          python -m compileall -q gravador_tela.py gravador_v2_utils.py gravador_v21_perf.py preparar_ambiente.py verificar_python.py
           $tokens = $null
           $errors = $null
           [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'INSTALAR.ps1').Path, [ref]$tokens, [ref]$errors)
@@ -58,19 +60,19 @@ jobs:
 
       - name: Testes de gravação, recuperação e exportação
         shell: pwsh
-        run: python -m unittest discover -s tests -p test_v2.py -v
+        run: python -m unittest discover -s tests -p 'test_v*.py' -v
 
       - name: Criar executável de prévia
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name GravadorTelaWin_v2_PREVIA --collect-all imageio_ffmpeg --collect-all soundcard --collect-all comtypes --hidden-import comtypes --hidden-import comtypes.client gravador_tela.py
-          if (!(Test-Path 'dist/GravadorTelaWin_v2_PREVIA.exe')) { throw 'Executável não gerado' }
-          Get-FileHash 'dist/GravadorTelaWin_v2_PREVIA.exe' -Algorithm SHA256
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name GravadorTelaWin_v2_1_PREVIA --collect-all imageio_ffmpeg --collect-all soundcard --collect-all comtypes --hidden-import comtypes --hidden-import comtypes.client gravador_tela.py
+          if (!(Test-Path 'dist/GravadorTelaWin_v2_1_PREVIA.exe')) { throw 'Executável não gerado' }
+          Get-FileHash 'dist/GravadorTelaWin_v2_1_PREVIA.exe' -Algorithm SHA256
 
       - name: Disponibilizar prévia para validação
         uses: actions/upload-artifact@v4
         with:
-          name: GravadorTelaWin-v2-PREVIA-Windows-x64
-          path: dist/GravadorTelaWin_v2_PREVIA.exe
+          name: GravadorTelaWin-v2.1-PREVIA-Windows-x64
+          path: dist/GravadorTelaWin_v2_1_PREVIA.exe
           if-no-files-found: error
           retention-days: 30

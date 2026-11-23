@@ -251,7 +251,7 @@ def launch_app():
 def build_exe():
     args = [
         str(EXE), '-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile', '--windowed',
-        '--name', 'GravadorTelaWin_v2_PREVIA', '--collect-all', 'imageio_ffmpeg',
+        '--name', 'GravadorTelaWin_v2_1_PREVIA', '--collect-all', 'imageio_ffmpeg',
         '--collect-all', 'soundcard', '--collect-all', 'comtypes',
         '--hidden-import', 'comtypes', '--hidden-import', 'comtypes.client',
         str(SOURCE),

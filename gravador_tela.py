@@ -33,8 +33,12 @@ from gravador_v2_utils import (
     enumerate_windows, window_info, find_recoverable_sessions,
     write_session_manifest, recover_session,
 )
+from gravador_v21_perf import (
+    ENCODER_LABELS, PROFILE_PRESETS, load_progress, save_health_snapshot,
+    select_encoder,
+)
 
-APP_NAME = "GravadorTelaWin 2.0 (prévia)"
+APP_NAME = "GravadorTelaWin 2.1 (prévia)"
 RATE = 48_000
 
 
@@ -69,6 +73,7 @@ class Settings:
     mic: bool
     system_audio: bool
     folder: Path
+    encoder_preference: str = "Automático"
 
 
 class AudioCapture:
@@ -164,12 +169,15 @@ class Segment:
     log_handle: object
     started_at: float
     audio: list[AudioCapture] = field(default_factory=list)
+    progress_path: Path | None = None
 
 
 class RecordingEngine:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        # Teste de GPU real (e não apenas presença do nome no FFmpeg).
+        self.encoder = select_encoder(self.ffmpeg, settings.encoder_preference, settings.crf)
         self.settings.folder.mkdir(parents=True, exist_ok=True)
         self.tempdir = Path(tempfile.mkdtemp(prefix="gravador_tela_", dir=self.settings.folder))
         self.segments: list[Segment] = []
@@ -180,16 +188,21 @@ class RecordingEngine:
 
     def _ffmpeg_command(self, path: Path) -> list[str]:
         a = self.settings.area
+        encoder = getattr(self, "encoder", None)  # compatível com testes do motor v2.0
+        codec = encoder.codec if encoder else "libx264"
+        encoder_opts = encoder.options if encoder else ("-preset", "veryfast", "-crf", str(self.settings.crf))
+        progress_file = getattr(self, "_progress_path", path.with_suffix(".progress"))
         source = ["-i", f"hwnd={a.hwnd:#x}"] if a.hwnd is not None else [
             "-offset_x", str(a.x), "-offset_y", str(a.y),
             "-video_size", f"{a.width}x{a.height}", "-i", "desktop",
         ]
         return [
             self.ffmpeg, "-hide_banner", "-loglevel", "warning", "-y",
+            "-stats_period", "1", "-progress", str(progress_file),
             "-f", "gdigrab", "-framerate", str(self.settings.fps),
             "-draw_mouse", "1", *source,
             "-an", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", str(self.settings.crf),
+            "-c:v", codec, *encoder_opts,
             "-g", str(2 * self.settings.fps), "-pix_fmt", "yuv420p", str(path),
         ]
 
@@ -198,6 +211,7 @@ class RecordingEngine:
             raise RuntimeError("Já existe uma captura ativa.")
         idx = len(self.segments) + 1
         video = self.tempdir / f"video_{idx:03d}.mkv"
+        self._progress_path = self.tempdir / f"ffmpeg_{idx:03d}.progress"
         log_handle = (self.tempdir / f"ffmpeg_{idx:03d}.log").open("wb")
         try:
             process = subprocess.Popen(
@@ -209,7 +223,8 @@ class RecordingEngine:
             log_handle.close()
             raise
         started_at = time.monotonic()
-        segment = Segment(idx, video, process, log_handle, started_at)
+        segment = Segment(idx, video, process, log_handle, started_at,
+                          progress_path=self._progress_path)
         self.current = segment
         if self.settings.mic:
             source = AudioCapture("microfone", self.tempdir / f"mic_{idx:03d}.wav", started_at)
@@ -220,13 +235,19 @@ class RecordingEngine:
             segment.audio.append(source)
             source.start()
 
-        time.sleep(0.15)
+        time.sleep(0.6 if self.encoder.codec != "libx264" else 0.15)
         if process.poll() is not None:
             for source in segment.audio:
                 source.stop()
             segment.log_handle.close()
             self.current = None
             log_txt = (self.tempdir / f"ffmpeg_{idx:03d}.log").read_text(errors="replace")
+            if self.settings.encoder_preference == "Automático" and self.encoder.codec != "libx264":
+                failed_codec = self.encoder.label
+                self.encoder = select_encoder(self.ffmpeg, "CPU (compatível)", self.settings.crf)
+                self.warnings.append(f"Falha na captura via {failed_codec}; repetindo com CPU.")
+                self.start_segment()  # somente uma tentativa; CPU não recorre novamente
+                return
             raise RuntimeError("Falha ao iniciar o FFmpeg.\n" + log_txt[-1600:])
 
     @staticmethod
@@ -247,6 +268,29 @@ class RecordingEngine:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=3)
+
+    def health(self) -> dict:
+        """Informações locais para diagnóstico e prevenção de falha em gravações longas."""
+        state: dict = {
+            "encoder": self.encoder.label,
+            "codec": self.encoder.codec,
+            "fps_configurado": self.settings.fps,
+            "disco_livre_mb": round(shutil.disk_usage(self.settings.folder).free / (1024 ** 2), 1),
+        }
+        # Exportação MP4 precisa de espaço adicional para remux e arquivo final.
+        # Exibe uma estimativa conservadora, não uma garantia de tamanho.
+        try:
+            media_bytes = sum(p.stat().st_size for p in self.tempdir.glob("*.mkv") if p.is_file())
+            media_bytes += sum(p.stat().st_size for p in self.tempdir.glob("*.wav") if p.is_file())
+        except OSError:
+            media_bytes = 0
+        media_mb = media_bytes / (1024 ** 2)
+        state["reserva_exportacao_mb"] = round(max(550, media_mb * 2.4 + 150), 1)
+        if self.current is not None:
+            state["ffmpeg_ativo"] = self.current.process.poll() is None
+            if self.current.progress_path:
+                state.update(load_progress(self.current.progress_path))
+        return state
 
     def stop_segment(self) -> None:
         seg = self.current
@@ -504,8 +548,8 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("925x765")
-        self.minsize(820, 700)
+        self.geometry("985x805")
+        self.minsize(855, 740)
         self.configure(bg="#111827")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.events: queue.Queue = queue.Queue()
@@ -517,6 +561,9 @@ class App(tk.Tk):
         self.preview_photo: ImageTk.PhotoImage | None = None
         self.recorded_sec = 0.0
         self.segment_started = 0.0
+        self.health_last = 0.0
+        self.snapshot_last = 0.0
+        self.last_disk_warning = False
         self.job_thread: threading.Thread | None = None
 
         with mss.mss() as sct:
@@ -544,7 +591,7 @@ class App(tk.Tk):
 
         main = tk.Frame(self, bg="#111827", padx=23, pady=18)
         main.pack(fill="both", expand=True)
-        tk.Label(main, text="GRAVADOR DE TELA • V2.0", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
+        tk.Label(main, text="GRAVADOR DE TELA • V2.1", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
         tk.Label(main, text="Windows 10/11  •  MP4  •  Captura local, sem envio para a nuvem",
                  font=("Segoe UI", 10), bg="#111827", fg="#9ca3af").pack(anchor="w", pady=(1, 17))
 
@@ -590,7 +637,22 @@ class App(tk.Tk):
         self.quality_combo = ttk.Combobox(controls, textvariable=self.quality_var,
                                            values=["Alta", "Equilibrada", "Arquivo menor"],
                                            state="readonly", style="Dark.TCombobox")
-        self.quality_combo.grid(row=2, column=1, columnspan=3, sticky="ew", pady=(5, 13), ipady=4)
+        self.quality_combo.grid(row=2, column=1, sticky="ew", padx=(0, 9), pady=(5, 13), ipady=4)
+        tk.Label(controls, text="Perfil", bg="#1d293a", fg="white").grid(row=1, column=2, sticky="w")
+        self.profile_var = tk.StringVar(value="Equilibrado (30 FPS)")
+        self.profile_combo = ttk.Combobox(controls, textvariable=self.profile_var,
+                                          values=[*PROFILE_PRESETS, "Personalizado"],
+                                          state="readonly", style="Dark.TCombobox", width=22)
+        self.profile_combo.grid(row=2, column=2, sticky="ew", padx=(0, 9), pady=(5, 13), ipady=4)
+        self.profile_combo.bind("<<ComboboxSelected>>", self._preset_changed)
+        self.fps_combo.bind("<<ComboboxSelected>>", lambda _: self.profile_var.set("Personalizado"))
+        self.quality_combo.bind("<<ComboboxSelected>>", lambda _: self.profile_var.set("Personalizado"))
+        tk.Label(controls, text="Codificação de vídeo", bg="#1d293a", fg="white").grid(row=1, column=3, sticky="w")
+        self.encoder_var = tk.StringVar(value="Automático")
+        self.encoder_combo = ttk.Combobox(controls, textvariable=self.encoder_var,
+                                          values=list(ENCODER_LABELS), state="readonly",
+                                          style="Dark.TCombobox", width=19)
+        self.encoder_combo.grid(row=2, column=3, sticky="ew", pady=(5, 13), ipady=4)
         self.mic_var = tk.BooleanVar(value=False)
         self.sys_var = tk.BooleanVar(value=False)
         self.mic_check = ttk.Checkbutton(controls, text="Áudio do microfone", variable=self.mic_var, style="Dark.TCheckbutton")
@@ -600,6 +662,7 @@ class App(tk.Tk):
         controls.columnconfigure(0, weight=1)
         controls.columnconfigure(1, weight=1)
         controls.columnconfigure(2, weight=1)
+        controls.columnconfigure(3, weight=1)
         self.audio_levels = tk.StringVar(value="MIC: —    SISTEMA: —")
         tk.Label(controls, textvariable=self.audio_levels, bg="#1d293a", fg="#7cddc0",
                  font=("Consolas", 10)).grid(row=4, column=0, columnspan=4, sticky="w", pady=(11, 0))
@@ -636,6 +699,9 @@ class App(tk.Tk):
         foot.pack(fill="x", pady=(17, 0))
         self.status_var = tk.StringVar(value="Pronto para gravar")
         tk.Label(foot, textvariable=self.status_var, bg="#111827", fg="#a7b8c9", font=("Segoe UI", 10)).pack(side="left")
+        self.performance_var = tk.StringVar(value="Codificador: aguardando   •   FPS: —   •   Disco: —")
+        tk.Label(main, textvariable=self.performance_var, bg="#111827", fg="#93c5fd",
+                 font=("Consolas", 10)).pack(anchor="w", pady=(8, 0))
         self.elapsed_var = tk.StringVar(value="00:00:00")
         tk.Label(foot, textvariable=self.elapsed_var, bg="#111827", fg="white", font=("Consolas", 16, "bold")).pack(side="right")
         tk.Label(main, text="Atalhos globais: Ctrl + Shift + R  (iniciar/parar)   •   Ctrl + Shift + P  (pausar/retomar)",
@@ -758,17 +824,30 @@ class App(tk.Tk):
         if folder:
             self.folder_var.set(folder)
 
+    def _preset_changed(self, _event=None) -> None:
+        preset = PROFILE_PRESETS.get(self.profile_var.get())
+        if preset:
+            fps, crf = preset
+            self.fps_var.set(str(fps))
+            # CRF exato é aplicado em _settings; os nomes aqui são aproximações.
+            self.quality_var.set("Alta" if crf <= 21 else "Equilibrada" if crf <= 24 else "Arquivo menor")
+
     def _settings(self) -> Settings:
         folder = Path(self.folder_var.get().strip()).expanduser()
         if not str(self.folder_var.get()).strip():
             raise ValueError("Informe a pasta onde as gravações serão salvas.")
         crf = {"Alta": 19, "Equilibrada": 23, "Arquivo menor": 28}[self.quality_var.get()]
+        preset = PROFILE_PRESETS.get(self.profile_var.get())
+        if preset and int(self.fps_var.get()) == preset[0]:
+            crf = preset[1]
         return Settings(self._selected_screen(), int(self.fps_var.get()), crf,
-                        self.mic_var.get(), self.sys_var.get(), folder)
+                        self.mic_var.get(), self.sys_var.get(), folder,
+                        self.encoder_var.get())
 
     def _set_config_enabled(self, enabled: bool) -> None:
         readonly = "readonly" if enabled else "disabled"
-        for widget in [self.screen_combo, self.fps_combo, self.quality_combo]:
+        for widget in [self.screen_combo, self.fps_combo, self.quality_combo,
+                       self.profile_combo, self.encoder_combo]:
             widget.configure(state=readonly)
         for widget in [self.mic_check, self.sys_check, self.area_button, self.browse_button]:
             widget.configure(state="normal" if enabled else "disabled")
@@ -785,20 +864,26 @@ class App(tk.Tk):
                 settings.folder.mkdir(parents=True, exist_ok=True)
                 if shutil.disk_usage(settings.folder).free < 400 * 1024 * 1024:
                     raise ValueError("Espaço insuficiente: libere pelo menos 400 MB no disco de gravação.")
-                self.engine = RecordingEngine(settings)
-                self.engine.start_segment()
             except Exception as exc:
-                tmp = self.engine.tempdir if self.engine else None
-                messagebox.showerror("Não foi possível iniciar", f"{exc}\n\n{f'Arquivos de diagnóstico: {tmp}' if tmp else ''}")
-                self.engine = None
+                messagebox.showerror("Não foi possível iniciar", str(exc))
                 return
-            self.recorded_sec = 0
-            self.segment_started = time.monotonic()
-            self.state = "recording"
+            self.state = "starting"
             self._set_config_enabled(False)
-            self.record_button.configure(text="■  ENCERRAR E SALVAR", bg="#c93543")
-            self.pause_button.configure(state="normal")
-            self.status_var.set("● Gravando a tela...")
+            self.record_button.configure(state="disabled")
+            self.pause_button.configure(state="disabled")
+            self.status_var.set("Testando codificador GPU e preparando gravação...")
+
+            def start_in_background():
+                engine = None
+                try:
+                    engine = RecordingEngine(settings)
+                    engine.start_segment()
+                    self.events.put(("started", engine))
+                except Exception as exc:
+                    self.events.put(("start_error", (str(exc), engine.tempdir if engine else None)))
+
+            self.job_thread = threading.Thread(target=start_in_background, daemon=True, name="start")
+            self.job_thread.start()
         elif self.state in ("recording", "paused"):
             if self.state == "recording":
                 self.recorded_sec += time.monotonic() - self.segment_started
@@ -851,12 +936,28 @@ class App(tk.Tk):
         self.pause_button.configure(text="Ⅱ  PAUSAR", state="disabled")
         self.status_var.set("Pronto para gravar")
         self.audio_levels.set("MIC: —    SISTEMA: —")
+        self.performance_var.set("Codificador: aguardando   •   FPS: —   •   Disco: —")
 
     def _poll(self) -> None:
         try:
             while True:
                 event, data = self.events.get_nowait()
-                if event == "paused":
+                if event == "started":
+                    self.engine = data
+                    self.recorded_sec = 0.0
+                    self.segment_started = data.current.started_at
+                    self.health_last = 0.0
+                    self.snapshot_last = 0.0
+                    self.last_disk_warning = False
+                    self.state = "recording"
+                    self.record_button.configure(text="■  ENCERRAR E SALVAR", bg="#c93543", state="normal")
+                    self.pause_button.configure(state="normal")
+                    self.status_var.set("● Gravando a tela • " + data.encoder.label)
+                elif event == "start_error":
+                    msg, tmp = data
+                    self._reset()
+                    messagebox.showerror("Não foi possível iniciar", f"{msg}\n\nArquivos temporários: {tmp or 'não criados'}")
+                elif event == "paused":
                     self.state = "paused"
                     self.audio_levels.set("MIC: —    SISTEMA: —")
                     self.status_var.set("Ⅱ Gravação pausada")
@@ -899,6 +1000,33 @@ class App(tk.Tk):
         whole = int(seconds)
         self.elapsed_var.set(f"{whole // 3600:02d}:{whole // 60 % 60:02d}:{whole % 60:02d}")
         if self.engine is not None and self.state == "recording" and self.engine.current:
+            now = time.monotonic()
+            if now - self.health_last >= 1.5:
+                self.health_last = now
+                try:
+                    h = self.engine.health()
+                    fps_value = h.get("fps")
+                    fps_txt = f"{fps_value:.1f}" if isinstance(fps_value, float) and fps_value > 0 else "—"
+                    speed = h.get("speed")
+                    speed_txt = f"{speed:.2f}x" if isinstance(speed, float) and speed > 0 else "—"
+                    self.performance_var.set(
+                        f"Encoder: {h['encoder']}  •  FPS real: {fps_txt}/{h['fps_configurado']}"
+                        f"  •  Vel.: {speed_txt}  •  Disco: {h['disco_livre_mb'] / 1024:.1f} GB")
+                    if now - self.snapshot_last >= 5:
+                        self.snapshot_last = now
+                        save_health_snapshot(self.engine.tempdir, {
+                            "capturado_em": dt.datetime.now().isoformat(timespec="seconds"),
+                            **h,
+                        })
+                    if h["disco_livre_mb"] < h["reserva_exportacao_mb"] and not self.last_disk_warning:
+                        self.last_disk_warning = True
+                        self.engine.warnings.append("Disco próximo da reserva estimada para exportação; salvando preventivamente.")
+                        self._record_action()  # salva antes que o disco fique completamente cheio
+                    elif h.get("ffmpeg_ativo") is False:
+                        self.engine.warnings.append("O FFmpeg encerrou inesperadamente.")
+                        self._record_action()
+                except (OSError, ValueError) as exc:
+                    self.performance_var.set(f"Diagnóstico temporariamente indisponível: {exc}")
             values = {a.kind: a.level_dbfs for a in self.engine.current.audio}
             def show(name):
                 v = values.get(name)
