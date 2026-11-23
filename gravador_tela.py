@@ -202,7 +202,7 @@ class RecordingEngine:
         # Hotfix: gdigrab(hwnd=...) pode retornar quadros pretos no Chrome.
         # Reutiliza o modo por região, que já funciona no Windows do usuário.
         source = desktop_capture_args(a.x, a.y, a.width, a.height)
-        camera_inputs, video_flags = studio_video_flags(self.settings.webcam_device, a.width)
+        camera_inputs, video_flags = studio_video_flags(getattr(self.settings, "webcam_device", None), a.width)
         return [
             self.ffmpeg, "-hide_banner", "-loglevel", "warning", "-y",
             "-stats_period", "1", "-progress", str(progress_file),
@@ -241,7 +241,7 @@ class RecordingEngine:
             segment.audio.append(source)
             source.start()
 
-        time.sleep(0.8 if self.settings.webcam_device else (0.6 if self.encoder.codec != "libx264" else 0.15))
+        time.sleep(0.8 if getattr(self.settings, "webcam_device", None) else (0.6 if self.encoder.codec != "libx264" else 0.15))
         if process.poll() is not None:
             for source in segment.audio:
                 source.stop()
