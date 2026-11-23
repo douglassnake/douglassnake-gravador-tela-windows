@@ -1,10 +1,33 @@
-# Correção 2.1.1 RC — Chrome (23/11/2026)
+# GravadorTelaWin 2.1.2 RC — estabilidade de imagem e áudio (23/11/2026)
 
-Ao selecionar uma janela do Chrome, o FFmpeg `gdigrab` por `hwnd` podia registrar apenas vídeo preto ou sem imagem. O modo corrigido usa o **recorte visível do desktop** calculado a partir da janela, como já funcionava em "Selecionar área". O aplicativo minimiza a si próprio e tenta trazer a janela escolhida para a frente ao iniciar ou retomar.
+**Problema relatado:** captura do Chrome corrigida na v2.1.1, mas áudio e vídeo apresentam cortes em qualidade alta com codificação automática.
 
-**Teste no Windows:** selecionar Chrome, clicar Gravar, navegar por 20 segundos sem cobrir nem mover a janela e encerrar com **Ctrl+Shift+R**. Conferir imagem e áudio no MP4 final. Teste também seleção manual de área, pausa, retomada e captura de monitor.
+**Mudanças desta prévia:**
 
-**Limitação:** a janela deve permanecer visível, sem ser coberta, minimizada ou movida durante a gravação. Janelas protegidas por DRM podem continuar indisponíveis. Captura de janelas ocultas demandará integração futura com Windows.Graphics.Capture. O código passou em testes automatizados locais, mas a captura real do Chrome exige homologação no Windows.
+- O modo `Automático` continua testando se a GPU funciona, mas também codifica ~2 segundos de imagem sintética **em movimento**, na resolução da captura (limitada a 2560 × 1440) e FPS configurado. Uma GPU que não atingir uma margem de 1,15× do tempo real não será selecionada automaticamente. Esse teste é uma aproximação e não substitui a captura real do Chrome.
+- O codificador por CPU passa do preset `veryfast` para `superfast` para reduzir a carga; isso pode aumentar o tamanho do arquivo, mesmo mantendo a qualidade CRF escolhida.
+- Novo perfil `Estável (24 FPS)` (CRF 21), adequado para gravações com texto e apresentação de telas.
+- Indicador de advertência quando a velocidade de codificação fica abaixo de 0,85× por três medições consecutivas após 10 segundos.
+- Salva `Gravacao_..._desempenho.csv` junto ao MP4 com informações técnicas do codificador, FPS e velocidade para diagnóstico. Não inclui nomes de janela, imagens nem caminhos particulares.
+- Mantém o recorte por região usado na correção do Chrome e os recursos de captura e recuperação da v2.1.1.
+
+**Teste no Windows:** grave 1 minuto de Chrome em `Estável (24 FPS)` e `Automático` e depois 1 minuto com `CPU (compatível)`. Compare a fluidez e, se houver cortes, envie apenas o CSV correspondente (revise antes de compartilhar). Também verifique no Gerenciador de Tarefas se CPU, GPU e disco ficam perto de 100% durante a gravação.
+
+**Limitações:** o teste sintético de GPU não mede captura GDI nem a sobrecarga do Chrome. Não há garantia de eliminação dos cortes em todo computador; esta versão precisa de teste real. Nenhum vídeo é enviado à nuvem. A v1.3 permanece intocada na branch `main`.
+
+---
+
+# GravadorTelaWin 2.1.1 RC — correção de captura do Chrome
+
+## Correção da captura de janela (Chrome e aplicativos acelerados)
+
+Na v2.1, a seleção de uma janela enviava o identificador da janela (`hwnd`) ao `gdigrab` do FFmpeg. Em aplicações que usam GPU, como o Chrome, esse modo pode resultar em vídeo preto ou sem imagem. A v2.1.1 usa **a mesma captura de região do desktop que já funcionava**, calculando o recorte automaticamente pela posição da janela.
+
+**Como testar:** selecione uma janela normal do Chrome na lista, clique em Gravar, use o Chrome durante 15–30 segundos e finalize com `Ctrl+Shift+R`. O gravador minimiza automaticamente para não cobrir o navegador. Ao salvar, o gravador reaparece.
+
+**Limitações transparentes:** este é um modo compatível de captura de **pixels visíveis**. Deixe o Chrome aberto, dentro do monitor, não o cubra com outra janela e evite movê-lo ou redimensioná-lo durante a gravação. Ele não captura conteúdo de uma janela minimizada ou oculta. Para capturar independentemente dessas limitações, será necessária uma integração posterior com `Windows.Graphics.Capture`. A gravação de conteúdo protegido por DRM pode continuar indisponível.
+
+A seleção por área, os monitores, o áudio e a codificação por GPU não foram alterados. Validar o comportamento no Windows com o Chrome é obrigatório antes de integrar à branch principal.
 
 ---
 

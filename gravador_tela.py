@@ -35,10 +35,10 @@ from gravador_v2_utils import (
 )
 from gravador_v21_perf import (
     ENCODER_LABELS, PROFILE_PRESETS, load_progress, save_health_snapshot,
-    select_encoder,
+    select_encoder, append_performance_sample,
 )
 
-APP_NAME = "GravadorTelaWin 2.1.1 (correção Chrome)"
+APP_NAME = "GravadorTelaWin 2.1.2 (estabilidade)"
 RATE = 48_000
 
 
@@ -177,7 +177,9 @@ class RecordingEngine:
         self.settings = settings
         self.ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
         # Teste de GPU real (e não apenas presença do nome no FFmpeg).
-        self.encoder = select_encoder(self.ffmpeg, settings.encoder_preference, settings.crf)
+        self.encoder = select_encoder(self.ffmpeg, settings.encoder_preference, settings.crf,
+                                      width=settings.area.width, height=settings.area.height,
+                                      fps=settings.fps)
         self.settings.folder.mkdir(parents=True, exist_ok=True)
         self.tempdir = Path(tempfile.mkdtemp(prefix="gravador_tela_", dir=self.settings.folder))
         self.segments: list[Segment] = []
@@ -192,8 +194,8 @@ class RecordingEngine:
         codec = encoder.codec if encoder else "libx264"
         encoder_opts = encoder.options if encoder else ("-preset", "veryfast", "-crf", str(self.settings.crf))
         progress_file = getattr(self, "_progress_path", path.with_suffix(".progress"))
-        # Chrome acelerado pode retornar quadros pretos com gdigrab(hwnd=...).
-        # Captura a região visível calculada automaticamente, igual ao modo área.
+        # Hotfix: gdigrab(hwnd=...) pode retornar quadros pretos no Chrome.
+        # Reutiliza o modo por região, que já funciona no Windows do usuário.
         source = desktop_capture_args(a.x, a.y, a.width, a.height)
         return [
             self.ffmpeg, "-hide_banner", "-loglevel", "warning", "-y",
@@ -423,6 +425,13 @@ class RecordingEngine:
         if not partial.is_file() or partial.stat().st_size < 1000:
             raise RuntimeError("O MP4 final não foi criado corretamente.")
         os.replace(partial, output)
+        # Preserva amostras de desempenho para identificar eventuais engasgos.
+        csv_path = self.tempdir / 'desempenho_amostras.csv'
+        if csv_path.exists():
+            try:
+                shutil.copy2(csv_path, output.with_name(output.stem + '_desempenho.csv'))
+            except OSError as exc:
+                self.warnings.append(f'Não foi possível salvar o relatório de desempenho: {exc}')
         shutil.rmtree(self.tempdir, ignore_errors=True)
         return output
 
@@ -564,6 +573,8 @@ class App(tk.Tk):
         self.snapshot_last = 0.0
         self.last_disk_warning = False
         self.job_thread: threading.Thread | None = None
+        self.lento_amostras = 0
+        self.lento_avisado = False
 
         with mss.mss() as sct:
             virtual = sct.monitors[0]
@@ -854,7 +865,12 @@ class App(tk.Tk):
         self.recover_button.configure(state="normal" if enabled else "disabled")
 
     def _prepare_visible_window(self, hwnd: int | None) -> None:
-        """Minimiza o gravador para não cobrir a área da janela selecionada."""
+        """Remove o próprio gravador da frente e dá foco à janela selecionada.
+
+        Chamado somente na thread de interface. O Windows pode impedir foco de
+        outros processos; em tal caso a janela precisa ser trazida manualmente
+        para a frente. Não minimizamos nem movemos a janela escolhida.
+        """
         if hwnd is None or sys.platform != "win32":
             return
         self.iconify()
@@ -868,7 +884,7 @@ class App(tk.Tk):
             pass
 
     def _resume_visible_window(self) -> None:
-        """Retoma a sessão após a interface sair da frente."""
+        """Retoma após a interface ser minimizada para não aparecer no vídeo."""
         try:
             assert self.engine is not None
             self.engine.start_segment()
@@ -900,6 +916,8 @@ class App(tk.Tk):
             except Exception as exc:
                 messagebox.showerror("Não foi possível iniciar", str(exc))
                 return
+            self.lento_amostras = 0
+            self.lento_avisado = False
             self.state = "starting"
             self._set_config_enabled(False)
             self.record_button.configure(state="disabled")
@@ -919,7 +937,7 @@ class App(tk.Tk):
 
             self.job_thread = threading.Thread(target=start_in_background, daemon=True, name="start")
             if settings.area.hwnd is not None:
-                self.after(350, self.job_thread.start)  # aguarda o Windows redesenhar o Chrome
+                self.after(350, self.job_thread.start)  # deixar o Chrome redesenhar sem o gravador à frente
             else:
                 self.job_thread.start()
         elif self.state in ("recording", "paused"):
@@ -1052,6 +1070,24 @@ class App(tk.Tk):
                     self.performance_var.set(
                         f"Encoder: {h['encoder']}  •  FPS real: {fps_txt}/{h['fps_configurado']}"
                         f"  •  Vel.: {speed_txt}  •  Disco: {h['disco_livre_mb'] / 1024:.1f} GB")
+                    try:
+                        append_performance_sample(self.engine.tempdir, h,
+                            dt.datetime.now().isoformat(timespec='seconds'))
+                    except OSError:
+                        pass  # Falha de telemetria nunca interrompe uma gravação.
+                    # Speed indica throughput do FFmpeg. FPS de saída isolado não é
+                    # uma medida confiável da frequência real da captura de tela.
+                    speed_ratio = h.get('speed')
+                    if seconds >= 10 and isinstance(speed_ratio, (int, float)) and 0 < speed_ratio < 0.85:
+                        self.lento_amostras += 1
+                    else:
+                        self.lento_amostras = 0
+                    if self.lento_amostras >= 3 and not self.lento_avisado:
+                        self.lento_avisado = True
+                        warning = ('Codificação abaixo do tempo real: reduza para 24 FPS '
+                                   'ou use o perfil Equilibrado para evitar cortes.')
+                        self.engine.warnings.append(warning)
+                        self.status_var.set('⚠ Codificação lenta: considere 24 FPS no próximo vídeo')
                     if now - self.snapshot_last >= 5:
                         self.snapshot_last = now
                         save_health_snapshot(self.engine.tempdir, {

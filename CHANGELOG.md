@@ -1,10 +1,20 @@
-## 2.1.1-rc — Chrome (23/11/2026)
+## 2.1.2-rc — ajustes de estabilidade e diagnóstico (23/11/2026)
 
-- Captura de janela via área visível de desktop, contornando limitações de GDI por HWND com Chrome.
-- Recorte seguro para múltiplos monitores e bordas fora do desktop.
-- Gravador minimiza e tenta ativar a janela escolhida; reaparece ao concluir.
-- Testes de regressão para captura por janela e preservação do motor de áudio, GPU e exportação.
-- Limitação documentada: janela deve ficar visível e sem ser movida.
+- Benchmark de aproximadamente 2 segundos de vídeo dinâmico para seleção automática de GPU, substituindo a aprovação apenas pelo teste pequeno de compatibilidade.
+- Libx264 passou a usar `superfast` para reduzir esforço da CPU (arquivos podem ficar maiores).
+- Perfil Estável (24 FPS) com qualidade CRF 21.
+- Advertência de processamento lento após três amostras abaixo de 0,85x em gravação contínua.
+- Relatório CSV de FPS e velocidade, salvo ao lado do MP4 sem informação do conteúdo capturado.
+- Mantém a captura visível de janela do Chrome da v2.1.1.
+
+## 2.1.1-rc — correção de janela Chrome (23/11/2026)
+
+- Substituída captura GDI direta de janela por captura da área visível do desktop calculada automaticamente.
+- Tratado recorte de janela parcialmente fora do desktop virtual e múltiplos monitores.
+- O gravador minimiza ao iniciar/retomar captura de janela e reaparece ao salvar ou falhar.
+- Aviso da limitação de janelas cobertas, minimizadas ou movidas.
+- Testes de regressão para argumentos FFmpeg e recortes de janela.
+- Correção limitada ao modo janela; modos monitor, região, áudio, perfis e recuperação preservados.
 
 # Histórico de versões
 
