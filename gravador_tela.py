@@ -44,7 +44,7 @@ from gravador_v23_overlay import (
     StudioOverlay, CaptureBounds, ANNOTATION_TOOLS,
 )
 
-APP_NAME = "GravadorTelaWin 2.5 RC2 (Estúdio)"
+APP_NAME = "GravadorTelaWin 2.6 RC1 (Estúdio)"
 RATE = 48_000
 
 
@@ -642,7 +642,7 @@ class App(tk.Tk):
 
         main = tk.Frame(self, bg="#111827", padx=23, pady=18)
         main.pack(fill="both", expand=True)
-        tk.Label(main, text="GRAVADOR DE TELA • ESTÚDIO V2.5 RC2", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
+        tk.Label(main, text="GRAVADOR DE TELA • ESTÚDIO V2.6 RC1", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
         tk.Label(main, text="Windows 10/11  •  MP4  •  Captura local, sem envio para a nuvem",
                  font=("Segoe UI", 10), bg="#111827", fg="#9ca3af").pack(anchor="w", pady=(1, 17))
 
@@ -1239,6 +1239,9 @@ class App(tk.Tk):
                         try:
                             self.studio_overlay.save_annotations(
                                 path.with_name(path.stem + '_anotacoes.png'))
+                            # Projeto editável de anotações, sem imagens do desktop.
+                            self.studio_overlay.save_project(
+                                path.with_name(path.stem + '_anotacoes.gtwproj'))
                         except (OSError, ValueError, MemoryError) as exc:
                             warnings.append('Anotações não exportadas: ' + str(exc))
                     self._reset()

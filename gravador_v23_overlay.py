@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Estúdio 2.4: efeitos, anotações reversíveis e barra de ferramentas.
+"""Estúdio 2.6: ferramentas avançadas e projetos de anotação editáveis.
 
 Este módulo só cria janelas quando explicitamente ativado. Sem hook de teclado,
 acesso remoto ou instalação de drivers. O Windows é a única plataforma suportada
@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from PIL import ImageGrab, ImageTk
 from tkinter import filedialog, messagebox
 from gravador_v25_export import export_annotations
+from gravador_v26_project import save_project, load_project
 from gravador_v24_history import (
     AnnotationHistory, HistoryChange, ANNOTATION_COLORS, STROKE_WIDTHS,
 )
@@ -121,7 +122,9 @@ class StudioOverlay:
         self.active_tool: str | None = None
         self.pending_erase: set[int] = set()
         self.text_value = 'Texto'
+        self.selected_text_id: int | None = None
         self.text_entry: tk.Entry | None = None
+        self.selection_label: tk.Label | None = None
         self.font_sizes: dict[int, int] = {}
         self.history = AnnotationHistory()
         self.toolbar_window: tk.Toplevel | None = None
@@ -279,6 +282,8 @@ class StudioOverlay:
         if name not in ANNOTATION_TOOLS:
             raise ValueError('Ferramenta de anotação inválida')
         self.tool = name
+        if name != 'Texto':
+            self.selected_text_id = None
         if self.on_tool_changed is not None:
             self.on_tool_changed(name)
         self._refresh_toolbar_buttons()
@@ -345,6 +350,147 @@ class StudioOverlay:
         return export_annotations(destination, self._annotation_records(),
                                   self.bounds.width, self.bounds.height)
 
+
+    def save_project(self, destination) -> object:
+        """Salva objetos editáveis sem incluir pixels, webcam ou áudio."""
+        return save_project(destination, self._annotation_records(),
+                            self.bounds.width, self.bounds.height)
+
+    def _create_from_record(self, item: dict, *, hidden: bool = False) -> int:
+        """Recria um objeto validado do JSON na área atual."""
+        kind, pts, color = item['tipo'], item['pontos'], item['cor']
+        thick = item['espessura']
+        opts = {'state': 'hidden'} if hidden else {}
+        if kind == 'Texto':
+            size = item['fonte_px']
+            ident = self.canvas.create_text(pts[0], pts[1], anchor='nw',
+                text=item['texto'], fill=color, font=('Segoe UI', size, 'bold'), **opts)
+            self.font_sizes[ident] = size
+            return ident
+        if kind == 'Retângulo':
+            return self.canvas.create_rectangle(*pts[:4], outline=color,
+                                                width=thick, **opts)
+        return self.canvas.create_line(*pts, fill=color, width=thick,
+            arrow='last' if kind == 'Seta' else 'none',
+            smooth=kind == 'Caneta', **opts)
+
+    def load_project(self, source) -> int:
+        """Valida e prepara novos objetos ANTES de remover o desenho anterior."""
+        rows = load_project(source, self.bounds.width, self.bounds.height)
+        self._finish_erase()
+        created = []
+        original_sizes = dict(self.font_sizes)
+        try:
+            for item in rows:
+                created.append(self._create_from_record(item, hidden=True))
+        except Exception:
+            for ident in created:
+                self.canvas.delete(ident)
+            self.font_sizes = original_sizes
+            raise
+        for ident in self.history.all_items:
+            self.canvas.delete(ident)
+        self.history = AnnotationHistory()
+        self.font_sizes = {ident: self.font_sizes[ident] for ident in created
+                           if ident in self.font_sizes}
+        self.selected_text_id = None
+        self.active_item = None
+        self.active_tool = None
+        self.anchor = None
+        for ident in created:
+            self.history.record(ident)
+            self.canvas.itemconfigure(ident, state='normal')
+        self._refresh_toolbar_buttons()
+        return len(created)
+
+    def save_project_dialog(self) -> None:
+        self._text_changed()
+        name = filedialog.asksaveasfilename(parent=self.toolbar_window or self.parent,
+            title='Salvar projeto de anotações editável',
+            defaultextension='.gtwproj', initialfile='anotacoes.gtwproj',
+            filetypes=[('Projeto de anotações', '*.gtwproj')])
+        if not name:
+            return
+        try:
+            path = self.save_project(name)
+            messagebox.showinfo('Projeto salvo', f'Anotações editáveis: {path}',
+                                parent=self.toolbar_window or self.parent)
+        except (OSError, ValueError, MemoryError) as exc:
+            messagebox.showerror('Falha ao salvar projeto', str(exc),
+                                 parent=self.toolbar_window or self.parent)
+
+    def load_project_dialog(self) -> None:
+        name = filedialog.askopenfilename(parent=self.toolbar_window or self.parent,
+            title='Abrir projeto de anotações', filetypes=[
+                ('Projetos e exportações', '*.gtwproj *.json'),
+                ('Projeto GravadorTelaWin', '*.gtwproj'),
+                ('JSON da versão 2.5', '*.json')])
+        if not name:
+            return
+        try:
+            rows = load_project(name, self.bounds.width, self.bounds.height)
+            if self.history.visible and not messagebox.askyesno(
+                    'Substituir anotações?',
+                    f'Abrir {len(rows)} anotações substituirá o desenho atual e '
+                    'reiniciará o histórico de desfazer. Continuar?',
+                    parent=self.toolbar_window or self.parent):
+                return
+            count = self.load_project(name)
+            messagebox.showinfo('Projeto aberto', f'{count} anotações carregadas.',
+                                parent=self.toolbar_window or self.parent)
+        except (OSError, ValueError, MemoryError) as exc:
+            messagebox.showerror('Falha ao abrir projeto', str(exc),
+                                 parent=self.toolbar_window or self.parent)
+
+    def _select_existing_text(self, x: float, y: float) -> bool:
+        """Toque num texto existente para preencher o campo da barra flutuante."""
+        hits = self.canvas.find_overlapping(x-5, y-5, x+5, y+5)
+        for ident in reversed(hits):
+            if ident not in self.history.visible or self.canvas.type(ident) != 'text':
+                continue
+            self.selected_text_id = ident
+            self.text_value = self.canvas.itemcget(ident, 'text')
+            if self.text_entry is not None:
+                self.text_entry.delete(0, 'end')
+                self.text_entry.insert(0, self.text_value)
+            self._refresh_toolbar_buttons()
+            return True
+        return False
+
+    def update_selected_text(self) -> None:
+        """Troca texto selecionado mantendo sua posição, com desfazer/refazer."""
+        old = self.selected_text_id
+        if (old is None or old not in self.history.visible or
+                self.canvas.type(old) != 'text'):
+            messagebox.showinfo('Editar texto',
+                'Selecione Texto e clique em uma anotação existente antes de atualizar.',
+                parent=self.toolbar_window or self.parent)
+            return
+        self._text_changed()
+        value = self.text_value.strip()
+        if not value:
+            messagebox.showinfo('Editar texto', 'Digite um texto não vazio.',
+                                parent=self.toolbar_window or self.parent)
+            return
+        coords = self.canvas.coords(old)
+        current_text = self.canvas.itemcget(old, 'text')
+        current_color = self.canvas.itemcget(old, 'fill')
+        size = self.font_sizes.get(old, 24)
+        color = ANNOTATION_COLORS[self.color_name]
+        if value == current_text and color.lower() == current_color.lower():
+            return
+        new_id = self.canvas.create_text(coords[0], coords[1], anchor='nw',
+            text=value, fill=color, font=('Segoe UI', size, 'bold'))
+        self.font_sizes[new_id] = size
+        try:
+            self._apply_history(self.history.replace(old, new_id))
+        except Exception:
+            self.canvas.delete(new_id)
+            self.font_sizes.pop(new_id, None)
+            raise
+        self.selected_text_id = new_id
+        self._refresh_toolbar_buttons()
+
     def export_dialog(self) -> None:
         if not self.history.visible:
             messagebox.showinfo('Anotações', 'Desenhe algo antes de salvar.',
@@ -397,18 +543,20 @@ class StudioOverlay:
         self.active_item = None
         self.anchor = None
         self.active_tool = None
+        self.selected_text_id = None
 
     def undo(self) -> None:
         self._finish_erase()
         self._apply_history(self.history.undo())
+        self._refresh_toolbar_buttons()
 
     def redo(self) -> None:
         self._finish_erase()
         self._apply_history(self.history.redo())
 
     @staticmethod
-    def toolbar_origin(bounds: CaptureBounds, width: int = 560,
-                       height: int = 82) -> tuple[int, int]:
+    def toolbar_origin(bounds: CaptureBounds, width: int = 760,
+                       height: int = 158) -> tuple[int, int]:
         # Os retângulos podem iniciar em monitores com coordenadas negativas.
         return (bounds.x + max(4, bounds.width - width - 12), bounds.y + 12)
 
@@ -425,7 +573,7 @@ class StudioOverlay:
         panel.configure(bg='#142235')
         panel.wm_attributes('-topmost', True)
         panel.wm_attributes('-alpha', 0.96)
-        panel.geometry('560x118+0+0')
+        panel.geometry('760x158+0+0')
         outer = tk.Frame(panel, bg='#142235', padx=7, pady=5)
         outer.pack(fill='both', expand=True)
         top = tk.Frame(outer, bg='#142235')
@@ -457,13 +605,22 @@ class StudioOverlay:
         third.pack(fill='x', pady=(4, 0))
         tk.Label(third, text='Texto:', fg='#d5e7ff', bg='#142235',
                  font=('Segoe UI', 9)).pack(side='left')
-        self.text_entry = tk.Entry(third, width=36, bg='#26394f', fg='white',
+        self.text_entry = tk.Entry(third, width=28, bg='#26394f', fg='white',
                                    insertbackground='white', relief='flat',
                                    font=('Segoe UI', 9))
         self.text_entry.insert(0, self.text_value)
         self.text_entry.pack(side='left', padx=5)
         self.text_entry.bind('<KeyRelease>', self._text_changed)
-        self._toolbar_button(third, 'save', 'Salvar PNG + JSON', self.export_dialog)
+        self._toolbar_button(third, 'edittext', 'Atualizar texto', self.update_selected_text)
+        self._toolbar_button(third, 'save', 'PNG + JSON', self.export_dialog)
+        project = tk.Frame(outer, bg='#142235')
+        project.pack(fill='x', pady=(4, 0))
+        self._toolbar_button(project, 'saveproj', 'Salvar projeto', self.save_project_dialog)
+        self._toolbar_button(project, 'openproj', 'Abrir projeto', self.load_project_dialog)
+        self.selection_label = tk.Label(project,
+            text='Texto: clique no texto existente para editar',
+            fg='#cbd5e1', bg='#142235', font=('Segoe UI', 9))
+        self.selection_label.pack(side='left', padx=8)
         panel.update_idletasks()
         panel.deiconify()
         self.toolbar_window = panel
@@ -489,6 +646,16 @@ class StudioOverlay:
                 button.configure(state='normal' if self.history.can_undo else 'disabled')
             if key == 'redo':
                 button.configure(state='normal' if self.history.can_redo else 'disabled')
+            if key == 'edittext':
+                valid = (getattr(self, 'selected_text_id', None) is not None and
+                         self.selected_text_id in self.history.visible)
+                button.configure(state='normal' if valid else 'disabled')
+        if getattr(self, 'selection_label', None) is not None:
+            selected = (getattr(self, 'selected_text_id', None) is not None and
+                        self.selected_text_id in self.history.visible)
+            self.selection_label.configure(text=(
+                'Texto selecionado: altere o campo e clique Atualizar texto' if selected
+                else 'Texto: clique no texto existente para editar'))
 
     def _raise_toolbar(self) -> None:
         panel = self.toolbar_window
@@ -512,7 +679,7 @@ class StudioOverlay:
         raw = int(panel.winfo_id())
         hwnd = int(api.GetAncestor(wintypes.HWND(raw), 2) or raw)
         api.SetWindowPos(wintypes.HWND(hwnd), wintypes.HWND(HWND_TOPMOST),
-                         int(x), int(y), 560, 118,
+                         int(x), int(y), 760, 158,
                          SWP_NOACTIVATE | SWP_SHOWWINDOW)
 
     def _start_toolbar_drag(self, event) -> None:
@@ -538,6 +705,7 @@ class StudioOverlay:
         self.toolbar_window = None
         self.toolbar_buttons = {}
         self.text_entry = None
+        self.selection_label = None
         self.toolbar_drag_anchor = None
         if panel is not None:
             try:
@@ -576,6 +744,9 @@ class StudioOverlay:
             self._erase_at(event.x, event.y)
             return
         if self.tool == 'Texto':
+            if self._select_existing_text(event.x, event.y):
+                return
+            self.selected_text_id = None
             self._text_changed()
             value = self.text_value.strip()
             if not value:
@@ -586,6 +757,8 @@ class StudioOverlay:
                       font=('Segoe UI', size, 'bold'))
             self.font_sizes[item] = size
             self._apply_history(self.history.record(item))
+            self.selected_text_id = item
+            self._refresh_toolbar_buttons()
             return
         self.anchor = (event.x, event.y)
         self.active_tool = self.tool

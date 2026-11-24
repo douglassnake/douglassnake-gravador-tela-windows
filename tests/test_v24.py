@@ -158,7 +158,7 @@ class OverlayTests(unittest.TestCase):
     def test_toolbar_uses_negative_coordinates(self):
         o=self.make()
         x,y=o.toolbar_origin(o.bounds)
-        self.assertEqual((x,y),(-1280+1280-560-12,52))
+        self.assertEqual((x,y),(-1280+1280-760-12,52))
         o.toolbar_window=MagicMock()
         o.toolbar_position=(x,y)
         with patch.object(o, '_position_toolbar') as placement:

@@ -283,7 +283,7 @@ def main() -> int:
     try:
         LOG = LOGFILE.open('a', encoding='utf-8')
         report('\n' + '=' * 68)
-        report('GravadorTelaWin 2.5-rc1 | ' + datetime.datetime.now().isoformat(timespec='seconds'))
+        report('GravadorTelaWin 2.6-rc1 | ' + datetime.datetime.now().isoformat(timespec='seconds'))
         report('Acao: ' + action)
         report('Diretorio: ' + str(ROOT))
         base, info = select_python()

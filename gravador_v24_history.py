@@ -50,6 +50,11 @@ class AnnotationHistory:
         return frozenset(self._visible)
 
     @property
+    def all_items(self) -> frozenset[int]:
+        """IDs ainda mantidos pelo histórico, incluindo estados ocultos."""
+        return frozenset(self._visible | {i for a in self._actions for i in a.items})
+
+    @property
     def can_undo(self) -> bool:
         return self._cursor > 0
 
@@ -60,8 +65,8 @@ class AnnotationHistory:
     def _branch(self) -> tuple[int, ...]:
         discarded = self._actions[self._cursor:]
         self._actions = self._actions[:self._cursor]
-        orphaned = {item for action in discarded if action.kind == 'add'
-                    for item in action.items}
+        orphaned = {item for action in discarded
+                    for item in ((action.items[-1],) if action.kind == 'replace' else action.items if action.kind == 'add' else ())}
         retained = {item for action in self._actions for item in action.items}
         return tuple(sorted(orphaned - retained - self._visible))
 
@@ -81,6 +86,15 @@ class AnnotationHistory:
         garbage = self._append(_Action('add', (item_id,)))
         self._visible.add(item_id)
         return HistoryChange(delete=garbage)
+
+    def replace(self, old_id: int, new_id: int) -> HistoryChange:
+        """Troca um texto por outro como UMA ação reversível."""
+        if old_id not in self._visible or new_id in self.all_items or new_id < 0:
+            raise ValueError('Item selecionado não pode ser substituído.')
+        garbage = self._append(_Action('replace', (old_id, new_id)))
+        self._visible.remove(old_id)
+        self._visible.add(new_id)
+        return HistoryChange(hide=(old_id,), delete=garbage)
 
     def erase(self, ids: tuple[int, ...] | list[int]) -> HistoryChange:
         """Oculta itens existentes em um unico gesto reversivel de borracha."""
@@ -107,6 +121,11 @@ class AnnotationHistory:
         if action.kind == 'add':
             self._visible.difference_update(action.items)
             return HistoryChange(hide=action.items)
+        if action.kind == 'replace':
+            old, new = action.items
+            self._visible.discard(new)
+            self._visible.add(old)
+            return HistoryChange(show=(old,), hide=(new,))
         self._visible.update(action.items)
         return HistoryChange(show=action.items)
 
@@ -118,5 +137,10 @@ class AnnotationHistory:
         if action.kind == 'add':
             self._visible.update(action.items)
             return HistoryChange(show=action.items)
+        if action.kind == 'replace':
+            old, new = action.items
+            self._visible.discard(old)
+            self._visible.add(new)
+            return HistoryChange(show=(new,), hide=(old,))
         self._visible.difference_update(action.items)
         return HistoryChange(hide=action.items)
