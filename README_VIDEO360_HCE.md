@@ -19,7 +19,7 @@
 - DX11/DX12/DirectML/OpenCL: apenas presença de DLL; **não é teste de execução**, portanto sempre `untested` quando encontrada.
 - Vulkan, CUDA, Tensor Cores, AVX2, decodificação e IA: `untested` até as sondagens dedicadas/benchmarks futuros.
 
-O arquivo JSON contém o modelo/ID PCI e número da versão do driver; revise esses campos antes de compartilhar. Não são coletados vídeos, prints, senhas, chaves, conteúdo do navegador ou gravações. Não há chamadas de rede ou instalações automáticas.
+O JSON inclui só o nome do executável FFmpeg (sem caminho de usuário), mas contém modelo/ID PCI e número da versão do driver; revise esses campos antes de compartilhar. Não são coletados vídeos, prints, senhas, chaves, conteúdo do navegador ou gravações. Não há chamadas de rede ou instalações automáticas.
 
 ## Significado dos estados
 
