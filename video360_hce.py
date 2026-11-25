@@ -10,6 +10,7 @@ import argparse
 import ctypes
 import datetime as dt
 import json
+import ntpath
 import os
 import platform
 import re
@@ -159,7 +160,7 @@ def probe_encoder(ffmpeg: str, codec: str, command=run_command) -> dict[str, Any
 
 
 def probe_ffmpeg(ffmpeg: str | None, command=run_command) -> dict[str, Any]:
-    result: dict[str, Any] = {"path": ffmpeg, "codecs": {}, "acceleration_listed": [], "decode": {}}
+    result: dict[str, Any] = {"path": ntpath.basename(ffmpeg) if ffmpeg else None, "codecs": {}, "acceleration_listed": [], "decode": {}}
     if not ffmpeg:
         result["status"] = state("unavailable", "FFmpeg nao encontrado; nenhum codec testado")
         result["codecs"] = {codec: state("untested", "FFmpeg ausente") for codec in ENCODERS}
