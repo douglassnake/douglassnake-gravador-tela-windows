@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-set "REPORT=Video360_HCE_%COMPUTERNAME%_%RANDOM%.json"
+set "REPORT=Video360_HCE_%RANDOM%.json"
 if exist "video360_hce.exe" (
   "video360_hce.exe" --output "%REPORT%"
 ) else if exist ".venv\Scripts\python.exe" (
