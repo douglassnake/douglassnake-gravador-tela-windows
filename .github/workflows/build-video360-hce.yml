@@ -1,0 +1,53 @@
+name: Video360 AI HCE 0.1 - diagnostico Windows
+
+on:
+  push:
+    branches: [feature/video360-ai]
+    paths:
+      - video360_hce.py
+      - tests/test_hce.py
+      - DIAGNOSTICAR_HARDWARE.bat
+      - README_VIDEO360_HCE.md
+      - .github/workflows/build-video360-hce.yml
+  pull_request:
+    paths:
+      - video360_hce.py
+      - tests/test_hce.py
+      - DIAGNOSTICAR_HARDWARE.bat
+      - README_VIDEO360_HCE.md
+      - .github/workflows/build-video360-hce.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hce-verify-and-build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Testes unitarios HCE
+        shell: pwsh
+        run: python -m unittest discover -s tests -p 'test_hce.py' -v
+      - name: Compilar EXE independente (FFmpeg embarcado)
+        shell: pwsh
+        run: |
+          python -m pip install 'pyinstaller>=6,<7' 'imageio-ffmpeg>=0.5.1,<1'
+          python -m PyInstaller --noconfirm --clean --onefile --console --name video360_hce --collect-all imageio_ffmpeg video360_hce.py
+          if (!(Test-Path dist/video360_hce.exe)) { throw 'EXE nao gerado' }
+          Get-FileHash dist/video360_hce.exe -Algorithm SHA256
+      - name: Publicar executavel de diagnostico
+        uses: actions/upload-artifact@v4
+        with:
+          name: Video360-HCE-0.1-Windows-x64
+          path: |
+            dist/video360_hce.exe
+            DIAGNOSTICAR_HARDWARE.bat
+            README_VIDEO360_HCE.md
+          if-no-files-found: error
+          retention-days: 30
