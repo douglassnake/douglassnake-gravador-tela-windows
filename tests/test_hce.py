@@ -49,6 +49,11 @@ class EncoderTests(unittest.TestCase):
         self.assertEqual(hce.probe_encoder("ffmpeg","h264_nvenc",runner)["status"],"unavailable")
     def test_invalid_codec_not_executed(self):
         with self.assertRaises(ValueError): hce.probe_encoder("ffmpeg","injection;bad")
+    def test_ffmpeg_redacts_local_path(self):
+        data=hce.probe_ffmpeg(r"C:\\Users\\Profile\\AppData\\ffmpeg.exe", command=lambda argv,timeout=12:(1,"","fail"))
+        self.assertEqual(data["path"], "ffmpeg.exe")
+        self.assertNotIn("Profile", json.dumps(data))
+
     def test_ffmpeg_unavailable_has_untested(self):
         data=hce.probe_ffmpeg(None)
         self.assertEqual(data["status"]["status"],"unavailable")
