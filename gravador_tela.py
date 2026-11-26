@@ -19,7 +19,7 @@ import tempfile
 import threading
 import time
 import wave
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -43,8 +43,9 @@ from gravador_v22_studio import (
 from gravador_v23_overlay import (
     StudioOverlay, CaptureBounds, ANNOTATION_TOOLS,
 )
+from gravador_v27_dual import dual_capture_command, split_video_stream_command, choose_output_pair, dual_regions_valid
 
-APP_NAME = "GravadorTelaWin 2.6 RC1 (Estúdio)"
+APP_NAME = "GravadorTelaWin 2.7 RC1 (Captura dupla)"
 RATE = 48_000
 
 
@@ -82,6 +83,7 @@ class Settings:
     encoder_preference: str = "Automático"
     webcam_device: str | None = None
     separate_audio_tracks: bool = False
+    secondary_area: Screen | None = None
 
 
 class AudioCapture:
@@ -185,8 +187,10 @@ class RecordingEngine:
         self.settings = settings
         self.ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
         # Teste de GPU real (e não apenas presença do nome no FFmpeg).
+        probe_area = max((settings.area, settings.secondary_area) if settings.secondary_area is not None
+                         else (settings.area,), key=lambda area: area.width * area.height)
         self.encoder = select_encoder(self.ffmpeg, settings.encoder_preference, settings.crf,
-                                      width=settings.area.width, height=settings.area.height,
+                                       width=probe_area.width, height=probe_area.height,
                                       fps=settings.fps)
         self.settings.folder.mkdir(parents=True, exist_ok=True)
         self.tempdir = Path(tempfile.mkdtemp(prefix="gravador_tela_", dir=self.settings.folder))
@@ -454,6 +458,78 @@ class RecordingEngine:
         return output
 
 
+class DualRecordingEngine(RecordingEngine):
+    """Two desktop inputs in one FFmpeg process; output two independent MP4 files.
+
+    The original RecordingEngine remains unchanged for conventional recording.
+    Audio is captured once per segment, then reused for both export files.
+    """
+    def __init__(self, settings: Settings):
+        if settings.secondary_area is None:
+            raise ValueError("Área B não configurada")
+        dual_regions_valid(settings.area, settings.secondary_area)
+        super().__init__(settings)
+
+    def _ffmpeg_command(self, path: Path) -> list[str]:
+        assert self.settings.secondary_area is not None
+        codec = self.encoder.codec
+        return dual_capture_command(
+            self.ffmpeg, self.settings.area, self.settings.secondary_area,
+            self.settings.fps, codec, self.encoder.options,
+            getattr(self, "_progress_path", path.with_suffix(".progress")), path,
+            self.settings.webcam_device,
+        )
+
+    def finish(self) -> tuple[Path, Path]:
+        if self.current is not None:
+            self.stop_segment()
+        if not self.segments:
+            raise RuntimeError("Nenhum trecho capturado nas áreas A e B.")
+        destination_a, destination_b = choose_output_pair(self.settings.folder)
+        prepared = ([], [])
+        # Preserve the original dual-track MKV until BOTH exports succeed.
+        # A failed mux leaves the source session available for diagnosis.
+        for seg in self.segments:
+            for stream_index in (0, 1):
+                video = self.tempdir / f"area_{stream_index + 1}_{seg.index:03d}.mkv"
+                self._run_ffmpeg(split_video_stream_command(
+                    self.ffmpeg, seg.video, video, stream_index))
+                audio_ready = self._mux_segment(replace(seg, video=video))
+                target = self.tempdir / f"final_{stream_index + 1}_{seg.index:03d}.mp4"
+                shutil.copy2(audio_ready, target)
+                prepared[stream_index].append(target)
+
+        for stream_index, destination in enumerate((destination_a, destination_b)):
+            partial = destination.with_suffix(".partial.mp4")
+            if len(prepared[stream_index]) == 1:
+                shutil.copy2(prepared[stream_index][0], partial)
+            else:
+                playlist = self.tempdir / f"concat_area_{stream_index + 1}.txt"
+                playlist.write_text(
+                    "".join(f"file '{item.name}'\n" for item in prepared[stream_index]),
+                    encoding="utf-8")
+                self._run_ffmpeg([
+                    self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "concat", "-safe", "0", "-i", str(playlist),
+                    *(["-map", "0"] if self.settings.separate_audio_tracks else []),
+                    "-c", "copy", "-movflags", "+faststart", str(partial),
+                ])
+            if not partial.is_file() or partial.stat().st_size < 1000:
+                raise RuntimeError(f"Não foi possível concluir o vídeo da área {stream_index + 1}.")
+
+        # Nothing becomes visible under its final name until both MP4s exist.
+        os.replace(destination_a.with_suffix(".partial.mp4"), destination_a)
+        os.replace(destination_b.with_suffix(".partial.mp4"), destination_b)
+        metrics = self.tempdir / "desempenho_amostras.csv"
+        if metrics.exists():
+            try:
+                shutil.copy2(metrics, destination_a.with_name(destination_a.stem + "_desempenho.csv"))
+            except OSError as exc:
+                self.warnings.append(f"Não foi possível copiar métricas: {exc}")
+        shutil.rmtree(self.tempdir, ignore_errors=True)
+        return destination_a, destination_b
+
+
 class RegionSelector:
     """Seleção visual de retângulo no desktop virtual (também em multimonitor)."""
 
@@ -595,8 +671,8 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("1010x990")
-        self.minsize(855, 810)
+        self.geometry("1040x1050")
+        self.minsize(890, 845)
         self.configure(bg="#111827")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.events: queue.Queue = queue.Queue()
@@ -604,6 +680,7 @@ class App(tk.Tk):
         self.state = "idle"
         self.engine: RecordingEngine | None = None
         self.selected_area: Screen | None = None
+        self.selected_area_b: Screen | None = None
         self.window_lookup: dict[str, int] = {}
         self.preview_photo: ImageTk.PhotoImage | None = None
         self.recorded_sec = 0.0
@@ -642,7 +719,7 @@ class App(tk.Tk):
 
         main = tk.Frame(self, bg="#111827", padx=23, pady=18)
         main.pack(fill="both", expand=True)
-        tk.Label(main, text="GRAVADOR DE TELA • ESTÚDIO V2.6 RC1", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
+        tk.Label(main, text="GRAVADOR DE TELA • ESTÚDIO V2.7 RC1", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
         tk.Label(main, text="Windows 10/11  •  MP4  •  Captura local, sem envio para a nuvem",
                  font=("Segoe UI", 10), bg="#111827", fg="#9ca3af").pack(anchor="w", pady=(1, 17))
 
@@ -674,6 +751,31 @@ class App(tk.Tk):
         box.columnconfigure(0, weight=1)
         self._refresh_window_choices(keep_selection=False)
         self._update_area_label()
+
+        dual_box = tk.Frame(main, bg="#1d293a", padx=20, pady=11)
+        dual_box.pack(fill="x", pady=(10, 0))
+        self.dual_enabled_var = tk.BooleanVar(value=False)
+        self.dual_check = ttk.Checkbutton(dual_box, text="Gravar duas áreas simultaneamente (2 MP4)",
+                                          variable=self.dual_enabled_var, command=self._second_area_changed,
+                                          style="Dark.TCheckbutton")
+        self.dual_check.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 7))
+        tk.Label(dual_box, text="ÁREA B — monitor, janela ou recorte independente",
+                 bg="#1d293a", fg="#8ebeff", font=("Segoe UI", 9, "bold")).grid(
+                     row=1, column=0, columnspan=3, sticky="w")
+        self.second_var = tk.StringVar(value=self.screens[2].name if len(self.screens) > 2 else "Área personalizada")
+        self.second_combo = ttk.Combobox(dual_box, textvariable=self.second_var,
+                                          values=[s.name for s in self.screens] + ["Área personalizada"] + list(self.window_lookup),
+                                          state="disabled", style="Dark.TCombobox", font=("Segoe UI", 10))
+        self.second_combo.grid(row=2, column=0, sticky="ew", padx=(0, 8), pady=(5, 0), ipady=3)
+        self.second_combo.bind("<<ComboboxSelected>>", self._second_area_changed)
+        self.second_area_button = tk.Button(dual_box, text="Selecionar região B",
+                                             command=self._pick_second_area, bg="#334963", fg="white",
+                                             relief="flat", cursor="hand2", padx=12, pady=7, state="disabled")
+        self.second_area_button.grid(row=2, column=1, sticky="ew", pady=(5, 0))
+        self.second_area_label = tk.Label(dual_box, text="Segunda captura desligada",
+                                          bg="#1d293a", fg="#9ca3af", font=("Segoe UI", 9))
+        self.second_area_label.grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        dual_box.columnconfigure(0, weight=1)
 
         controls = tk.Frame(main, bg="#1d293a", padx=20, pady=17)
         controls.pack(fill="x", pady=(12, 0))
@@ -823,6 +925,11 @@ class App(tk.Tk):
             self.window_lookup[label] = target.hwnd
         values = [s.name for s in self.screens] + ["Área personalizada"] + list(self.window_lookup)
         self.screen_combo.configure(values=values)
+        if hasattr(self, "second_combo"):
+            self.second_combo.configure(values=values)
+            if self.second_var.get() not in values:
+                self.second_var.set("Área personalizada")
+            self._update_second_area_label()
         if previous not in values:
             self.screen_var.set(self.screens[1].name)
         if keep_selection:
@@ -900,6 +1007,57 @@ class App(tk.Tk):
                 return screen
         return self.screens[1]
 
+    def _selected_second_screen(self) -> Screen:
+        value = self.second_var.get()
+        if value in self.window_lookup:
+            target = window_info(self.window_lookup[value])
+            if target is None:
+                raise ValueError("A janela B está fechada ou minimizada. Atualize a lista.")
+            x, y, w, h = visible_window_rect(target, (
+                self.screens[0].x, self.screens[0].y,
+                self.screens[0].width, self.screens[0].height))
+            return Screen(target.title, x, y, w, h, target.hwnd)
+        if value == "Área personalizada":
+            if self.selected_area_b is None:
+                raise ValueError("Selecione a região B antes de iniciar a gravação.")
+            return self.selected_area_b
+        for screen in self.screens:
+            if screen.name == value:
+                return screen
+        raise ValueError("Área B inválida; selecione um monitor ou região.")
+
+    def _second_area_changed(self, _event=None) -> None:
+        enabled = self.dual_enabled_var.get()
+        self.second_combo.configure(state="readonly" if enabled else "disabled")
+        self.second_area_button.configure(state="normal" if enabled else "disabled")
+        self._update_second_area_label()
+        if enabled and self.second_var.get() == "Área personalizada" and self.selected_area_b is None:
+            self._pick_second_area()
+
+    def _update_second_area_label(self) -> None:
+        if not self.dual_enabled_var.get():
+            self.second_area_label.configure(text="Segunda captura desligada")
+            return
+        try:
+            second = self._selected_second_screen()
+            self.second_area_label.configure(
+                text=f"B: {second.width} × {second.height} • Origem ({second.x}, {second.y})")
+        except ValueError as exc:
+            self.second_area_label.configure(text=str(exc))
+
+    def _pick_second_area(self) -> None:
+        if self.state != "idle" or not self.dual_enabled_var.get():
+            return
+        try:
+            RegionSelector(self, self.screens[0], self._second_area_chosen)
+        except Exception as exc:
+            messagebox.showerror("Seleção B indisponível", str(exc))
+
+    def _second_area_chosen(self, region: Screen) -> None:
+        self.selected_area_b = region
+        self.second_var.set("Área personalizada")
+        self._update_second_area_label()
+
     def _update_area_label(self) -> None:
         try:
             s = self._selected_screen()
@@ -947,11 +1105,14 @@ class App(tk.Tk):
         preset = PROFILE_PRESETS.get(self.profile_var.get())
         if preset and int(self.fps_var.get()) == preset[0]:
             crf = preset[1]
+        secondary = self._selected_second_screen() if self.dual_enabled_var.get() else None
+        if secondary is not None:
+            dual_regions_valid(self._selected_screen(), secondary)
         return Settings(self._selected_screen(), int(self.fps_var.get()), crf,
                         self.mic_var.get(), self.sys_var.get(), folder,
                         self.encoder_var.get(),
                         None if self.webcam_var.get() == CAMERA_OFF else self.webcam_var.get(),
-                        self.separate_tracks_var.get())
+                        self.separate_tracks_var.get(), secondary)
 
     def _set_config_enabled(self, enabled: bool) -> None:
         readonly = "readonly" if enabled else "disabled"
@@ -961,8 +1122,12 @@ class App(tk.Tk):
             widget.configure(state=readonly)
         for widget in [self.mic_check, self.sys_check, self.separate_tracks_check,
                        self.webcam_button, self.area_button, self.browse_button,
-                       self.highlight_check, self.clicks_check, self.zoom_check]:
+                       self.highlight_check, self.clicks_check, self.zoom_check,
+                       self.dual_check]:
             widget.configure(state="normal" if enabled else "disabled")
+        dual_enabled = enabled and self.dual_enabled_var.get()
+        self.second_combo.configure(state="readonly" if dual_enabled else "disabled")
+        self.second_area_button.configure(state="normal" if dual_enabled else "disabled")
         self.folder_entry.configure(state="normal" if enabled else "disabled")
         self.refresh_windows_button.configure(state="normal" if enabled else "disabled")
         self.recover_button.configure(state="normal" if enabled else "disabled")
@@ -1111,9 +1276,11 @@ class App(tk.Tk):
                 settings = self._settings()
                 if settings.area.hwnd is not None and window_info(settings.area.hwnd) is None:
                     raise ValueError("A janela foi fechada ou minimizada. Selecione outra janela.")
+                if settings.secondary_area is not None and settings.secondary_area.hwnd is not None and window_info(settings.secondary_area.hwnd) is None:
+                    raise ValueError("A janela B está fechada ou minimizada.")
                 settings.folder.mkdir(parents=True, exist_ok=True)
-                if shutil.disk_usage(settings.folder).free < 400 * 1024 * 1024:
-                    raise ValueError("Espaço insuficiente: libere pelo menos 400 MB no disco de gravação.")
+                if shutil.disk_usage(settings.folder).free < (800 if settings.secondary_area else 400) * 1024 * 1024:
+                    raise ValueError("Espaço insuficiente: libere 800 MB para captura dupla ou 400 MB para captura simples.")
             except Exception as exc:
                 messagebox.showerror("Não foi possível iniciar", str(exc))
                 return
@@ -1131,7 +1298,7 @@ class App(tk.Tk):
             def start_in_background():
                 engine = None
                 try:
-                    engine = RecordingEngine(settings)
+                    engine = DualRecordingEngine(settings) if settings.secondary_area else RecordingEngine(settings)
                     engine.start_segment()
                     self.events.put(("started", engine))
                 except Exception as exc:
@@ -1147,7 +1314,7 @@ class App(tk.Tk):
                 self.recorded_sec += time.monotonic() - self.segment_started
             self.state = "saving"
             self.draw_button.configure(state="disabled")
-            self.status_var.set("Finalizando e salvando o arquivo MP4...")
+            self.status_var.set("Finalizando gravação e exportando arquivos MP4...")
             self.record_button.configure(state="disabled")
             self.pause_button.configure(state="disabled")
             self._launch_job("finish")
@@ -1214,7 +1381,8 @@ class App(tk.Tk):
                     self.record_button.configure(text="■  ENCERRAR E SALVAR", bg="#c93543", state="normal")
                     self.pause_button.configure(state="normal")
                     self.draw_button.configure(state="normal")
-                    recording_label = "janela visível" if data.settings.area.hwnd is not None else "a tela"
+                    recording_label = ("áreas A + B" if data.settings.secondary_area else
+                                       ("janela visível" if data.settings.area.hwnd is not None else "a tela"))
                     self.status_var.set("● Gravando " + recording_label + " • " + data.encoder.label)
                 elif event == "start_error":
                     msg, tmp = data
@@ -1231,7 +1399,9 @@ class App(tk.Tk):
                     self.pause_button.configure(text="▶  RETOMAR", state="normal")
                     self.record_button.configure(state="normal")
                 elif event == "finished":
-                    path, warnings = data
+                    result, warnings = data
+                    outputs = tuple(result) if isinstance(result, tuple) else (result,)
+                    path = outputs[0]
                     # A interface ainda está viva: salvar anotações no mesmo diretório
                     # do MP4 antes de destruir a camada visual. Falha de sidecar
                     # jamais invalida o vídeo concluído.
@@ -1246,9 +1416,10 @@ class App(tk.Tk):
                             warnings.append('Anotações não exportadas: ' + str(exc))
                     self._reset()
                     self.deiconify()
-                    self.status_var.set(f"Salvo: {path.name}")
+                    self.status_var.set("Salvos: " + ", ".join(x.name for x in outputs))
                     details = "\n\nAvisos de áudio:\n" + "\n".join(warnings[:5]) if warnings else ""
-                    if messagebox.askyesno("Gravação concluída", f"Arquivo salvo com sucesso:\n{path}{details}\n\nAbrir pasta da gravação?"):
+                    summary = "\n".join(str(x) for x in outputs)
+                    if messagebox.askyesno("Gravação concluída", f"Arquivos MP4 salvos com sucesso:\n{summary}{details}\n\nAbrir pasta da gravação?"):
                         os.startfile(path.parent) if sys.platform == "win32" else None
                 elif event == "error":
                     msg, workdir = data
