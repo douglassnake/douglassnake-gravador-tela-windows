@@ -10,7 +10,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$Versao = '2.6.0-rc1'
+$Versao = '2.7.0-rc1'
 $PastaOrigem = $PSScriptRoot
 $PastaLocal = Join-Path $env:LOCALAPPDATA 'GravadorTelaWin'
 $PastaPython = Join-Path $PastaLocal 'Runtime\Python312'
@@ -36,7 +36,7 @@ function Registrar([string]$Mensagem) {
 function Copiar-Programa() {
     Registrar "Origem: $PastaOrigem"
     Registrar "Destino local: $PastaLocal"
-    foreach ($nome in @('gravador_tela.py','gravador_v2_utils.py','gravador_v21_perf.py','gravador_v22_studio.py','gravador_v23_overlay.py','gravador_v24_history.py','gravador_v25_export.py','gravador_v26_project.py','preparar_ambiente.py','requirements.txt','verificar_python.py')) {
+    foreach ($nome in @('gravador_tela.py','gravador_v2_utils.py','gravador_v21_perf.py','gravador_v22_studio.py','gravador_v23_overlay.py','gravador_v24_history.py','gravador_v25_export.py','gravador_v26_project.py','gravador_v27_dual.py','preparar_ambiente.py','requirements.txt','verificar_python.py')) {
         $origem = Join-Path $PastaOrigem $nome
         $destino = Join-Path $PastaLocal $nome
         if (-not (Test-Path -LiteralPath $origem -PathType Leaf)) {

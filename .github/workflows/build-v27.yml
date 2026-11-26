@@ -1,0 +1,50 @@
+name: GravadorTelaWin 2.7 RC1 — captura dupla
+on:
+  push:
+    branches: [feature/gravador-v2-7-captura-dupla]
+    paths:
+      - 'gravador_tela.py'
+      - 'gravador_v27_dual.py'
+      - 'tests/test_v27*.py'
+      - 'INSTALAR.ps1'
+      - 'preparar_ambiente.py'
+      - '.github/workflows/build-v27.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test-and-build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Instalar dependências
+        shell: pwsh
+        run: python -m pip install -r requirements.txt 'pyinstaller>=6,<7'
+      - name: Validar sintaxe e instalador
+        shell: pwsh
+        run: |
+          python -m compileall -q gravador_tela.py gravador_v27_dual.py preparar_ambiente.py
+          $tokens = $null; $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'INSTALAR.ps1').Path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+      - name: Testes existentes e da captura dupla
+        shell: pwsh
+        run: python -m unittest discover -s tests -p 'test_v*.py' -v
+      - name: Compilar Windows x64
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name GravadorTelaWin_v2_7_DUAL_RC1 --collect-all imageio_ffmpeg --collect-all soundcard --collect-all comtypes --hidden-import comtypes --hidden-import comtypes.client gravador_tela.py
+          if (!(Test-Path 'dist/GravadorTelaWin_v2_7_DUAL_RC1.exe')) { throw 'EXE não gerado' }
+          Get-FileHash 'dist/GravadorTelaWin_v2_7_DUAL_RC1.exe' -Algorithm SHA256
+      - name: Publicar executável
+        uses: actions/upload-artifact@v4
+        with:
+          name: GravadorTelaWin-v2.7-RC1-CapturaDupla-Windows-x64
+          path: dist/GravadorTelaWin_v2_7_DUAL_RC1.exe
+          if-no-files-found: error
+          retention-days: 30
