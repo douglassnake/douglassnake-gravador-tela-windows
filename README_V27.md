@@ -45,3 +45,6 @@ O teste sintético usa FFmpeg com duas entradas de teste, pausa simulada em dois
 ## Reverter
 
 Use o executável homologado da v2.6, obtido na branch `main`. Os arquivos originais não são alterados pela prévia. Não faça merge em `main` antes da homologação física.
+
+
+**Correção de fluidez:** veja [v2.7 RC2](README_V27_RC2.md).
