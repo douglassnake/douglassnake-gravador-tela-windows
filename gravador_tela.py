@@ -44,8 +44,13 @@ from gravador_v23_overlay import (
     StudioOverlay, CaptureBounds, ANNOTATION_TOOLS,
 )
 from gravador_v27_dual import dual_capture_command, split_video_stream_command, choose_output_pair, dual_regions_valid
+from gravador_v27_perf import (
+    DUAL_STABLE, DUAL_ORIGINAL, DUAL_PROFILES, dual_config,
+    dual_cpu_options, synthetic_dual_probe, dual_diagnostic,
+)
+from gravador_v21_perf import EncoderChoice, encoder_arguments
 
-APP_NAME = "GravadorTelaWin 2.7 RC1 (Captura dupla)"
+APP_NAME = "GravadorTelaWin 2.7 RC2 (Captura dupla estável)"
 RATE = 48_000
 
 
@@ -84,6 +89,7 @@ class Settings:
     webcam_device: str | None = None
     separate_audio_tracks: bool = False
     secondary_area: Screen | None = None
+    dual_profile: str = DUAL_ORIGINAL
 
 
 class AudioCapture:
@@ -469,6 +475,31 @@ class DualRecordingEngine(RecordingEngine):
             raise ValueError("Área B não configurada")
         dual_regions_valid(settings.area, settings.secondary_area)
         super().__init__(settings)
+        self.dual_segments_metrics: list[dict] = []
+        self.dual_profile = dual_config(settings.dual_profile, settings.fps)
+        self.dual_preflight = synthetic_dual_probe(
+            self.ffmpeg, self.encoder.codec, self.encoder.options,
+            self.dual_profile, settings.area, settings.secondary_area)
+        # The old encoder selector measures only one stream; two encodes may
+        # exceed the available hardware's throughput or session limits.
+        if settings.encoder_preference == 'Automático' and (
+                not self.dual_preflight['ok'] or self.dual_preflight['speed'] < 1.07):
+            if self.encoder.codec != 'libx264':
+                cpu_options = encoder_arguments('libx264', settings.crf)
+                cpu_preflight = synthetic_dual_probe(
+                    self.ffmpeg, 'libx264', cpu_options, self.dual_profile,
+                    settings.area, settings.secondary_area)
+                if cpu_preflight['ok'] and (not self.dual_preflight['ok'] or
+                        cpu_preflight['speed'] > self.dual_preflight['speed'] * 1.08):
+                    self.encoder = EncoderChoice('libx264', 'CPU (compatível)', cpu_options)
+                    self.dual_preflight = cpu_preflight
+                    self.warnings.append('Teste de duas trilhas: usando CPU por ser mais estável.')
+        if not self.dual_preflight['ok']:
+            self.warnings.append('Teste prévio de duas trilhas falhou: ' + self.dual_preflight['details'])
+        elif self.dual_preflight['speed'] < 1.07:
+            self.warnings.append(
+                f"Codificação dupla sintética: {self.dual_preflight['speed']:.2f}x. "
+                'Pode haver cortes; use áreas menores ou perfil Fluidez.')
 
     def _ffmpeg_command(self, path: Path) -> list[str]:
         assert self.settings.secondary_area is not None
@@ -478,7 +509,20 @@ class DualRecordingEngine(RecordingEngine):
             self.settings.fps, codec, self.encoder.options,
             getattr(self, "_progress_path", path.with_suffix(".progress")), path,
             self.settings.webcam_device,
+            profile=self.settings.dual_profile,
         )
+
+    def stop_segment(self) -> None:
+        segment = self.current
+        super().stop_segment()
+        if segment is not None and segment.progress_path:
+            details = load_progress(segment.progress_path)
+            self.dual_segments_metrics.append({
+                'segmento': segment.index,
+                'quadros_processados_ffmpeg': details.get('frame'),
+                'quadros_duplicados_ffmpeg': details.get('dup_frames'),
+                'quadros_descartados_ffmpeg': details.get('drop_frames'),
+            })
 
     def finish(self) -> tuple[Path, Path]:
         if self.current is not None:
@@ -526,6 +570,17 @@ class DualRecordingEngine(RecordingEngine):
                 shutil.copy2(metrics, destination_a.with_name(destination_a.stem + "_desempenho.csv"))
             except OSError as exc:
                 self.warnings.append(f"Não foi possível copiar métricas: {exc}")
+        try:
+            dual_diagnostic(self.tempdir, destination_a,
+                            getattr(self, 'dual_profile', dual_config(
+                                self.settings.dual_profile, self.settings.fps)),
+                            getattr(getattr(self, 'encoder', None), 'codec', 'libx264'),
+                            self.settings.area, self.settings.secondary_area,
+                            getattr(self, 'dual_preflight', {}), self.warnings,
+                            getattr(self, 'dual_segments_metrics', []))
+        except (OSError, ValueError) as exc:
+            # Sidecar error must never invalidate either finished MP4.
+            self.warnings.append('Relatório da captura dupla não salvo: ' + str(exc))
         shutil.rmtree(self.tempdir, ignore_errors=True)
         return destination_a, destination_b
 
@@ -671,8 +726,8 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("1040x1050")
-        self.minsize(890, 845)
+        self.geometry("1040x1110")
+        self.minsize(890, 890)
         self.configure(bg="#111827")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.events: queue.Queue = queue.Queue()
@@ -775,6 +830,17 @@ class App(tk.Tk):
         self.second_area_label = tk.Label(dual_box, text="Segunda captura desligada",
                                           bg="#1d293a", fg="#9ca3af", font=("Segoe UI", 9))
         self.second_area_label.grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        tk.Label(dual_box, text="DESEMPENHO DA CAPTURA DUPLA", bg="#1d293a", fg="#8ebeff",
+                 font=("Segoe UI", 9, "bold")).grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        self.dual_profile_var = tk.StringVar(value=DUAL_STABLE)
+        self.dual_profile_combo = ttk.Combobox(dual_box, textvariable=self.dual_profile_var,
+                                               values=DUAL_PROFILES, state="disabled",
+                                               style="Dark.TCombobox", font=("Segoe UI", 10))
+        self.dual_profile_combo.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(4, 0), ipady=3)
+        self.dual_info = tk.Label(dual_box,
+            text="Fluidez: até 24 FPS e 720p por vídeo. Original: sem reduzir resolução.",
+            bg="#1d293a", fg="#9ca3af", font=("Segoe UI", 9))
+        self.dual_info.grid(row=6, column=0, columnspan=3, sticky="w", pady=(5, 0))
         dual_box.columnconfigure(0, weight=1)
 
         controls = tk.Frame(main, bg="#1d293a", padx=20, pady=17)
@@ -1030,6 +1096,7 @@ class App(tk.Tk):
         enabled = self.dual_enabled_var.get()
         self.second_combo.configure(state="readonly" if enabled else "disabled")
         self.second_area_button.configure(state="normal" if enabled else "disabled")
+        self.dual_profile_combo.configure(state="readonly" if enabled else "disabled")
         self._update_second_area_label()
         if enabled and self.second_var.get() == "Área personalizada" and self.selected_area_b is None:
             self._pick_second_area()
@@ -1108,11 +1175,15 @@ class App(tk.Tk):
         secondary = self._selected_second_screen() if self.dual_enabled_var.get() else None
         if secondary is not None:
             dual_regions_valid(self._selected_screen(), secondary)
-        return Settings(self._selected_screen(), int(self.fps_var.get()), crf,
+        fps = int(self.fps_var.get())
+        dual_profile = self.dual_profile_var.get() if secondary is not None else DUAL_ORIGINAL
+        if secondary is not None:
+            fps = dual_config(dual_profile, fps).capture_fps
+        return Settings(self._selected_screen(), fps, crf,
                         self.mic_var.get(), self.sys_var.get(), folder,
                         self.encoder_var.get(),
                         None if self.webcam_var.get() == CAMERA_OFF else self.webcam_var.get(),
-                        self.separate_tracks_var.get(), secondary)
+                        self.separate_tracks_var.get(), secondary, dual_profile)
 
     def _set_config_enabled(self, enabled: bool) -> None:
         readonly = "readonly" if enabled else "disabled"
@@ -1128,6 +1199,7 @@ class App(tk.Tk):
         dual_enabled = enabled and self.dual_enabled_var.get()
         self.second_combo.configure(state="readonly" if dual_enabled else "disabled")
         self.second_area_button.configure(state="normal" if dual_enabled else "disabled")
+        self.dual_profile_combo.configure(state="readonly" if dual_enabled else "disabled")
         self.folder_entry.configure(state="normal" if enabled else "disabled")
         self.refresh_windows_button.configure(state="normal" if enabled else "disabled")
         self.recover_button.configure(state="normal" if enabled else "disabled")
@@ -1381,7 +1453,8 @@ class App(tk.Tk):
                     self.record_button.configure(text="■  ENCERRAR E SALVAR", bg="#c93543", state="normal")
                     self.pause_button.configure(state="normal")
                     self.draw_button.configure(state="normal")
-                    recording_label = ("áreas A + B" if data.settings.secondary_area else
+                    recording_label = (f"áreas A + B a {data.settings.fps} FPS"
+                                       if data.settings.secondary_area else
                                        ("janela visível" if data.settings.area.hwnd is not None else "a tela"))
                     self.status_var.set("● Gravando " + recording_label + " • " + data.encoder.label)
                 elif event == "start_error":
@@ -1503,16 +1576,22 @@ class App(tk.Tk):
                     # Speed indica throughput do FFmpeg. FPS de saída isolado não é
                     # uma medida confiável da frequência real da captura de tela.
                     speed_ratio = h.get('speed')
-                    if seconds >= 10 and isinstance(speed_ratio, (int, float)) and 0 < speed_ratio < 0.85:
+                    dual = self.engine.settings.secondary_area is not None
+                    threshold = 0.97 if dual else 0.85
+                    if seconds >= 8 and isinstance(speed_ratio, (int, float)) and 0 < speed_ratio < threshold:
                         self.lento_amostras += 1
                     else:
                         self.lento_amostras = 0
-                    if self.lento_amostras >= 3 and not self.lento_avisado:
+                    if self.lento_amostras >= (2 if dual else 3) and not self.lento_avisado:
                         self.lento_avisado = True
-                        warning = ('Codificação abaixo do tempo real: reduza para 24 FPS '
+                        warning = ('Captura dupla abaixo do tempo real: reduza o tamanho das áreas '
+                                   'ou selecione Fluidez (720p / até 24 FPS).'
+                                   if dual else
+                                   'Codificação abaixo do tempo real: reduza para 24 FPS '
                                    'ou use o perfil Equilibrado para evitar cortes.')
                         self.engine.warnings.append(warning)
-                        self.status_var.set('⚠ Codificação lenta: considere 24 FPS no próximo vídeo')
+                        self.status_var.set('⚠ Captura dupla sobrecarregada — veja diagnóstico JSON'
+                                            if dual else '⚠ Codificação lenta: considere 24 FPS')
                     if now - self.snapshot_last >= 5:
                         self.snapshot_last = now
                         save_health_snapshot(self.engine.tempdir, {

@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from gravador_v2_utils import desktop_capture_args
+from gravador_v27_perf import DUAL_ORIGINAL, dual_config, dual_cpu_options, dual_filter_expr
 
 
 def _region(region) -> tuple[int, int, int, int]:
@@ -31,7 +32,8 @@ def dual_regions_valid(primary, secondary) -> None:
 def dual_capture_command(
     ffmpeg: str, primary, secondary, fps: int, codec: str,
     encoder_opts: tuple[str, ...] | list[str], progress_path: Path,
-    output: Path, webcam: str | None = None,
+    output: Path, webcam: str | None = None, *,
+    profile: str = DUAL_ORIGINAL,
 ) -> list[str]:
     """Single clock/session, two gdigrab sources and two encoded MKV video tracks.
 
@@ -43,10 +45,13 @@ def dual_capture_command(
         raise ValueError('FPS de captura inválido')
     if codec not in ('libx264', 'h264_nvenc', 'h264_qsv', 'h264_amf'):
         raise ValueError('Codificador não autorizado para captura dupla')
+    config = dual_config(profile, fps)
+    if config.capture_fps != fps:
+        raise ValueError('FPS pedido diverge do perfil efetivo')
     command = [ffmpeg, '-hide_banner', '-loglevel', 'warning', '-y',
                '-stats_period', '1', '-progress', str(progress_path)]
     for region in (primary, secondary):
-        command += ['-thread_queue_size', '256', '-f', 'gdigrab',
+        command += ['-thread_queue_size', str(config.queue_frames), '-f', 'gdigrab',
                     '-framerate', str(fps), '-draw_mouse', '1',
                     *desktop_capture_args(region.x, region.y, region.width, region.height)]
     graph: list[str] = []
@@ -55,18 +60,19 @@ def dual_capture_command(
             raise ValueError('Nome inválido da webcam')
         width = max(160, min(480, int(primary.width * .26)))
         width += width % 2
-        command += ['-thread_queue_size', '256', '-rtbufsize', '256M',
+        command += ['-thread_queue_size', str(config.queue_frames), '-rtbufsize', '64M',
                     '-f', 'dshow', '-framerate', '15', '-i', 'video=' + webcam]
         graph += [f'[2:v]fps=15,scale={width}:-2,setsar=1[cam]',
                   '[0:v][cam]overlay=W-w-16:H-h-16:shortest=0:repeatlast=1,'
-                  'pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p[v0]']
+                  'pad=ceil(iw/2)*2:ceil(ih/2)*2,' + dual_filter_expr(config) + 'format=yuv420p[v0]']
     else:
-        graph.append('[0:v]pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p[v0]')
-    graph.append('[1:v]pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p[v1]')
+        graph.append('[0:v]pad=ceil(iw/2)*2:ceil(ih/2)*2,' + dual_filter_expr(config) + 'format=yuv420p[v0]')
+    graph.append('[1:v]pad=ceil(iw/2)*2:ceil(ih/2)*2,' + dual_filter_expr(config) + 'format=yuv420p[v1]')
     return command + [
         '-an', '-filter_complex', ';'.join(graph),
         '-map', '[v0]', '-map', '[v1]',
-        '-c:v', codec, *encoder_opts, '-g', str(2 * fps),
+        '-c:v', codec, *dual_cpu_options(codec, encoder_opts, config),
+        '-g', str(2 * fps), '-fps_mode:v:0', 'vfr', '-fps_mode:v:1', 'vfr',
         '-pix_fmt', 'yuv420p', str(output),
     ]
 
