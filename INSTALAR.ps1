@@ -99,7 +99,7 @@ function Obter-CandidatosPython() {
                 $result = & $launcher.Source "-$versao" $Verificador 2>$null
                 if ($LASTEXITCODE -eq 0) {
                     foreach ($linha in @($result)) {
-                        if ([string]$linha -match '^CAMINHO=(.+)) {
+                        if ([string]$linha -match '^CAMINHO=(.+)$') {
                             Adicionar-Candidato $lista ([string]$Matches[1])
                         }
                     }
