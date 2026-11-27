@@ -153,8 +153,12 @@ def wait_for_scrcpy_recording(proc, video: Path, log_path: Path, *,
         f'Câmera B não confirmou início em {timeout:g}s. '
         f'{scrcpy_log_excerpt(log_path)}. Log: {log_path}')
 
-def _windows_for_pid(pid: int) -> list[int]:
-    """Enumerate only windows owned by this process; do not close other apps."""
+def _windows_for_pid(pid: int, *, include_hidden: bool = False) -> list[int]:
+    """Enumerate top-level HWNDs owned by this exact process (never other apps).
+
+    SDL windows may no longer satisfy IsWindowVisible after changing state.
+    A shutdown can examine hidden windows, while preview minimization may not.
+    """
     if sys.platform != 'win32':
         return []
     user32 = ctypes.windll.user32
@@ -165,13 +169,12 @@ def _windows_for_pid(pid: int) -> list[int]:
     def visitor(hwnd, _):
         owner = wintypes.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
-        if owner.value == pid and user32.IsWindowVisible(hwnd):
+        if owner.value == pid and (include_hidden or user32.IsWindowVisible(hwnd)):
             result.append(int(hwnd))
         return True
     cb = CALLBACK(visitor)
     user32.EnumWindows(cb, 0)
     return result
-
 
 def minimize_preview(proc) -> bool:
     if sys.platform != 'win32':
@@ -183,27 +186,71 @@ def minimize_preview(proc) -> bool:
 
 
 def request_camera_close(proc) -> bool:
-    """Request MKV finalization without blocking FFmpeg termination."""
+    """Ask the child scrcpy window to close, even if minimized or hidden.
+
+    Prefer the exact title supplied to scrcpy. Fall back ONLY to visible
+    top-level windows of the SAME process. Never broadcast a shutdown.
+    """
     if proc.poll() is not None:
         return True
     if sys.platform != 'win32':
         return False
-    windows = _windows_for_pid(proc.pid)
-    if not windows:
-        return False
+    candidates = _windows_for_pid(proc.pid, include_hidden=True)
+    if not candidates:
+        return proc.poll() is not None
+    user32 = ctypes.windll.user32
+    matched = []
+    for hwnd in candidates:
+        buf = ctypes.create_unicode_buffer(256)
+        try:
+            user32.GetWindowTextW(wintypes.HWND(hwnd), buf, len(buf))
+            if buf.value.strip() == WINDOW_TITLE:
+                matched.append(hwnd)
+        except (OSError, AttributeError, ValueError):
+            continue
+    windows = matched or _windows_for_pid(proc.pid)
+    posted = False
     for hwnd in windows:
-        ctypes.windll.user32.PostMessageW(wintypes.HWND(hwnd), 0x0010, 0, 0)
-    return True
+        try:
+            if user32.PostMessageW(wintypes.HWND(hwnd), 0x0010, 0, 0):
+                posted = True
+        except (OSError, AttributeError, ValueError):
+            pass
+    return posted or proc.poll() is not None
 
 
 def gracefully_stop_camera(proc, timeout: float = 15.0) -> bool:
-    """Wait for the scrcpy recorder to finish writing a complete MKV."""
+    """Wait for scrcpy to exit; this does NOT prove the MKV is readable."""
     if proc.poll() is not None:
         return True
-    if not request_camera_close(proc):
-        return False
+    posted = request_camera_close(proc)
+    if not hasattr(proc, 'wait'):
+        return proc.poll() is not None  # compatible with minimal diagnostic fakes
     try:
-        proc.wait(timeout=timeout)
+        # Allow a natural exit even if Windows could not locate the window.
+        proc.wait(timeout=timeout if posted else min(timeout, 2.0))
         return True
     except subprocess.TimeoutExpired:
+        return proc.poll() is not None
+
+
+def scrcpy_video_readable(ffmpeg: str, video: Path, *, timeout: float = 45.0,
+                          runner=subprocess.run) -> bool:
+    """Check a possibly interrupted MKV without modifying the original.
+
+    Demux/stream-copy the H.264 track to a null output. Called on abnormal
+    shutdown only, so normal recording does not pay this validation cost.
+    """
+    try:
+        if not video.is_file() or video.stat().st_size < 1000:
+            return False
+        cmd = [str(ffmpeg), '-hide_banner', '-loglevel', 'error', '-nostdin',
+               '-i', str(video), '-map', '0:v:0', '-an', '-c:v', 'copy',
+               '-f', 'null', '-']
+        opts = {'capture_output': True, 'timeout': timeout}
+        if sys.platform == 'win32':
+            opts['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+        result = runner(cmd, **opts)
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return False

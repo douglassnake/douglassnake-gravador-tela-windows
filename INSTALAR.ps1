@@ -1,4 +1,4 @@
-# GravadorTelaWin 1.3 - bootstrap local robusto (Windows PowerShell 5.1+)
+﻿# GravadorTelaWin 1.3 - bootstrap local robusto (Windows PowerShell 5.1+)
 # Evita executar fontes em UNC, identifica Python 3.11-3.13 instalado e recupera .venv.
 [CmdletBinding()]
 param(
@@ -10,7 +10,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$Versao = '2.7.0-rc5.1'
+$Versao = '2.7.0-rc5.2'
 $PastaOrigem = $PSScriptRoot
 $PastaLocal = Join-Path $env:LOCALAPPDATA 'GravadorTelaWin'
 $PastaPython = Join-Path $PastaLocal 'Runtime\Python312'
@@ -263,7 +263,7 @@ try {
         throw "Preparacao falhou com codigo $retorno. Consulte o diagnostico."
     }
     if ($Acao -eq 'GerarEXE') {
-        Registrar "Executavel criado em: $(Join-Path $PastaLocal 'dist\GravadorTelaWin_v2_7_UI_RC5_1.exe')"
+        Registrar "Executavel criado em: $(Join-Path $PastaLocal 'dist\GravadorTelaWin_v2_7_UI_RC5_2.exe')"
     }
     else { Registrar 'Aplicativo iniciado a partir do disco local.' }
     Registrar 'RESULTADO: OK'
