@@ -54,8 +54,13 @@ from gravador_v27_usb_camera import (
     list_usb_camera_devices, camera_matches_mobile,
     estimated_camera_region, validate_video_device_name,
 )
+from gravador_v27_scrcpy import (
+    SCRCPY_B_SOURCE, CAMERA_FACINGS, locate_scrcpy, check_usb_android,
+    scrcpy_camera_command, minimize_preview, request_camera_close, gracefully_stop_camera,
+)
+import json
 
-APP_NAME = "GravadorTelaWin 2.7 RC3 (Câmera USB na Área B)"
+APP_NAME = "GravadorTelaWin 2.7 RC4 (Android scrcpy USB)"
 RATE = 48_000
 
 
@@ -96,6 +101,8 @@ class Settings:
     secondary_area: Screen | None = None
     dual_profile: str = DUAL_ORIGINAL
     usb_camera_b: str | None = None
+    scrcpy_exe_b: str | None = None
+    scrcpy_facing: str = "Traseira"
 
 
 class AudioCapture:
@@ -608,6 +615,176 @@ class DualRecordingEngine(RecordingEngine):
         return destination_a, destination_b
 
 
+class ScrcpyDualEngine(RecordingEngine):
+    """Area A via existing FFmpeg, camera B via scrcpy native Android encoder.
+
+    This is intentionally independent from the dual-gdigrab/DirectShow path:
+    scrcpy writes its own MKV, so it does not pass through GDI or PC encoding.
+    The A timeline and B timeline begin separately. No promise of frame-exact
+    sync; RC4 emits a timing report and keeps B video-only to avoid false sync.
+    """
+    def __init__(self, settings: Settings):
+        if not settings.scrcpy_exe_b or settings.secondary_area or settings.usb_camera_b:
+            raise ValueError('Escolha apenas a câmera Android como Área B.')
+        self.scrcpy_exe, self.adb_exe = locate_scrcpy(settings.scrcpy_exe_b)
+        check_usb_android(self.adb_exe)
+        if settings.scrcpy_facing not in CAMERA_FACINGS:
+            raise ValueError('Câmera do Android inválida.')
+        super().__init__(settings)
+        self.scrcpy_camera_segments: dict[int, Path] = {}
+        self.scrcpy_timing: list[dict] = []
+        self.scrcpy_proc = None
+        self.scrcpy_log = None
+        self.scrcpy_camera_file = None
+
+    def start_segment(self) -> None:
+        # Reverify authorization on each resume: the USB cable may be removed.
+        check_usb_android(self.adb_exe)
+        super().start_segment()
+        assert self.current is not None
+        idx = self.current.index
+        camera_file = (self.tempdir / f'android_camera_{idx:03d}.mkv').absolute()
+        log = (self.tempdir / f'scrcpy_{idx:03d}.log').open('wb')
+        command = scrcpy_camera_command(
+            self.scrcpy_exe, camera_file, facing=self.settings.scrcpy_facing,
+            fluidez=self.settings.dual_profile == DUAL_STABLE)
+        started = time.monotonic()
+        try:
+            process = subprocess.Popen(
+                command, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                creationflags=(getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+                               if sys.platform == 'win32' else 0))
+            self.scrcpy_proc, self.scrcpy_log, self.scrcpy_camera_file = process, log, camera_file
+            # Wait for camera recording to initialize, not just for Popen to return.
+            camera_ready = False
+            for _ in range(50):
+                if process.poll() is not None:
+                    break
+                minimize_preview(process)
+                if camera_file.is_file() and camera_file.stat().st_size > 1000:
+                    camera_ready = True
+                    break
+                time.sleep(0.2)
+            if not camera_ready:
+                raise RuntimeError('O scrcpy não iniciou a gravação da câmera B. Consulte o log temporário.')
+            self.scrcpy_camera_segments[idx] = camera_file
+            self.scrcpy_timing.append({'segmento': idx,
+                'inicio_b_apos_a_segundos_estimado': round(started - self.current.started_at, 3),
+                'observacao': 'Horário de inicialização do processo; não mede o primeiro frame.'})
+        except Exception as exc:
+            if self.scrcpy_proc and self.scrcpy_proc.poll() is None:
+                if not gracefully_stop_camera(self.scrcpy_proc, timeout=5):
+                    self.scrcpy_proc.terminate()
+                    self.scrcpy_proc.wait(timeout=5)
+            if self.scrcpy_log:
+                self.scrcpy_log.close()
+            # Preserve the A data and source logs, but stop all running workers.
+            if self.current is not None:
+                try:
+                    super().stop_segment()
+                except Exception:
+                    pass
+            raise RuntimeError('Falha ao conectar câmera Android: ' + str(exc)) from exc
+
+    def health(self) -> dict:
+        state = super().health()
+        if self.scrcpy_proc is not None and self.current is not None:
+            alive = self.scrcpy_proc.poll() is None
+            state['scrcpy_camera_ativa'] = alive
+            if not alive:
+                state['ffmpeg_ativo'] = False  # request safe stop via existing UI
+            try:
+                if self.scrcpy_camera_file and self.scrcpy_camera_file.exists():
+                    state['reserva_exportacao_mb'] += round(
+                        self.scrcpy_camera_file.stat().st_size / 1048576 * 2, 1)
+            except OSError:
+                pass
+        return state
+
+    def stop_segment(self) -> None:
+        if self.current is None:
+            return
+        idx = self.current.index
+        # Request B close at nearly the same instant as the A/FFmpeg stop.
+        if self.scrcpy_proc:
+            request_camera_close(self.scrcpy_proc)
+        try:
+            super().stop_segment()
+        finally:
+            if self.scrcpy_proc:
+                closed = gracefully_stop_camera(self.scrcpy_proc, timeout=15)
+                if not closed:
+                    # Never claim such an MKV is valid: forced termination may
+                    # leave truncated container metadata. Preserve work directory.
+                    if self.scrcpy_proc.poll() is None:
+                        self.scrcpy_proc.terminate()
+                        try:
+                            self.scrcpy_proc.wait(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            self.scrcpy_proc.kill()
+                    self.warnings.append('scrcpy não finalizou normalmente o segmento B.')
+                if self.scrcpy_log:
+                    self.scrcpy_log.close()
+                self.scrcpy_proc = None
+                self.scrcpy_log = None
+                b = self.scrcpy_camera_segments.get(idx)
+                if not closed or not b or not b.exists() or b.stat().st_size < 1000:
+                    raise RuntimeError('Câmera B não foi finalizada corretamente; '
+                                       'os arquivos temporários foram preservados.')
+
+    def finish(self) -> tuple[Path, Path]:
+        if self.current is not None:
+            self.stop_segment()
+        if not self.segments:
+            raise RuntimeError('Nenhuma gravação disponível para exportar.')
+        dest_a, dest_b = choose_output_pair(self.settings.folder)
+        prepared_a, prepared_b = [], []
+        for seg in self.segments:
+            cam = self.scrcpy_camera_segments.get(seg.index)
+            if not cam or not cam.is_file() or cam.stat().st_size < 1000:
+                raise RuntimeError(f'Segmento Android {seg.index} ausente; dados preservados.')
+            ready_a = self._mux_segment(seg)
+            prepared_a.append(ready_a)
+            ready_b = self.tempdir / f'pronto_android_{seg.index:03d}.mp4'
+            self._run_ffmpeg([self.ffmpeg, '-hide_banner', '-loglevel', 'error', '-y',
+                              '-i', str(cam), '-map', '0:v:0', '-an', '-c:v', 'copy',
+                              '-movflags', '+faststart', str(ready_b)])
+            prepared_b.append(ready_b)
+        for destination, items, label in ((dest_a, prepared_a, 'A'), (dest_b, prepared_b, 'B')):
+            partial = destination.with_suffix('.partial.mp4')
+            if len(items) == 1:
+                shutil.copy2(items[0], partial)
+            else:
+                playlist = self.tempdir / f'concat_scrcpy_{label}.txt'
+                playlist.write_text(''.join(f"file '{p.name}'\n" for p in items),encoding='utf-8')
+                self._run_ffmpeg([self.ffmpeg, '-hide_banner', '-loglevel', 'error', '-y',
+                                  '-f', 'concat', '-safe', '0', '-i', str(playlist),
+                                  *( ['-map', '0'] if label=='A' and self.settings.separate_audio_tracks else [] ),
+                                  '-c', 'copy', '-movflags', '+faststart', str(partial)])
+            if not partial.is_file() or partial.stat().st_size < 1000:
+                raise RuntimeError(f'Exportação da Área {label} falhou; temporários preservados.')
+        os.replace(dest_a.with_suffix('.partial.mp4'), dest_a)
+        os.replace(dest_b.with_suffix('.partial.mp4'), dest_b)
+        payload = {'formato': 'gravador-v27-rc4-scrcpy-diagnostico-1',
+                   'fonte_a': 'desktop', 'fonte_b': 'android_camera_usb_scrcpy',
+                   'camera': self.settings.scrcpy_facing,
+                   'fps_a_configurado': self.settings.fps,
+                   'sincronia': 'aproximada, sem alinhamento quadro a quadro',
+                   'audio_b': 'não incluído nesta prévia',
+                   'segmentos': self.scrcpy_timing,
+                   'avisos': self.warnings[:20]}
+        try:
+            diagnostic = dest_a.with_name(dest_a.stem.replace('_AreaA', '') + '_android_diagnostico.json')
+            diagnostic.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+            metrics = self.tempdir / 'desempenho_amostras.csv'
+            if metrics.is_file():
+                shutil.copy2(metrics, dest_a.with_name(dest_a.stem + '_desempenho.csv'))
+        except OSError as exc:
+            self.warnings.append('Falha ao exportar diagnóstico: ' + str(exc))
+        shutil.rmtree(self.tempdir, ignore_errors=True)
+        return dest_a, dest_b
+
+
 class RegionSelector:
     """Seleção visual de retângulo no desktop virtual (também em multimonitor)."""
 
@@ -728,6 +905,7 @@ class GlobalShortcuts:
                 registered.append(ident)
             else:
                 failures.append(label)
+        # Diagnóstico pontual. Um atalho ocupado nunca desabilita os outros.
         self.events.put(("shortcut_status", {
             "primary_draw": 206 in registered,
             "fallback_draw": 210 in registered,
@@ -761,6 +939,7 @@ class App(tk.Tk):
         self.selected_area_b: Screen | None = None
         self.usb_camera_devices: list[str] = []
         self.usb_scanning = False
+        self.android_usb_ok = False
         self.window_lookup: dict[str, int] = {}
         self.preview_photo: ImageTk.PhotoImage | None = None
         self.recorded_sec = 0.0
@@ -842,7 +1021,7 @@ class App(tk.Tk):
         self.second_source_var = tk.StringVar(value=WINDOWS_B_SOURCE)
         self.second_source_combo = ttk.Combobox(
             dual_box, textvariable=self.second_source_var,
-            values=(WINDOWS_B_SOURCE, USB_B_SOURCE),
+            values=(WINDOWS_B_SOURCE, USB_B_SOURCE, SCRCPY_B_SOURCE),
             state="disabled", style="Dark.TCombobox", font=("Segoe UI", 10))
         self.second_source_combo.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 7), ipady=3)
         self.second_source_combo.bind("<<ComboboxSelected>>", self._second_area_changed)
@@ -875,6 +1054,25 @@ class App(tk.Tk):
         self.usb_camera_combo.grid_remove()
         self.usb_refresh_button.grid_remove()
         self.usb_camera_label.grid_remove()
+        self.scrcpy_exe_var = tk.StringVar(value=shutil.which('scrcpy.exe') or '')
+        self.scrcpy_path_entry = ttk.Entry(dual_box, textvariable=self.scrcpy_exe_var)
+        self.scrcpy_path_entry.grid(row=2, column=0, sticky='ew', padx=(0, 8), pady=(5, 0))
+        self.scrcpy_browse_button = tk.Button(dual_box, text='Selecionar scrcpy.exe',
+             command=self._browse_scrcpy, bg='#334963', fg='white', relief='flat', padx=8, pady=7)
+        self.scrcpy_browse_button.grid(row=2, column=1, sticky='ew')
+        self.scrcpy_facing_var = tk.StringVar(value='Traseira')
+        self.scrcpy_facing_combo = ttk.Combobox(dual_box, textvariable=self.scrcpy_facing_var,
+            values=CAMERA_FACINGS, state='readonly', style='Dark.TCombobox')
+        self.scrcpy_facing_combo.grid(row=3, column=0, sticky='ew')
+        self.scrcpy_detect_button = tk.Button(dual_box, text='Verificar Android USB',
+            command=self._check_android_usb, bg='#334963', fg='white', relief='flat', padx=8, pady=7)
+        self.scrcpy_detect_button.grid(row=3, column=1, sticky='ew')
+        self.scrcpy_hint = tk.Label(dual_box, text='Conecte o Android por USB com depuração autorizada.',
+            bg='#1d293a', fg='#9ca3af', font=('Segoe UI', 9))
+        self.scrcpy_hint.grid(row=3, column=2, sticky='w')
+        for widget in (self.scrcpy_path_entry, self.scrcpy_browse_button,
+                       self.scrcpy_facing_combo, self.scrcpy_detect_button, self.scrcpy_hint):
+            widget.grid_remove()
         tk.Label(dual_box, text="DESEMPENHO DA CAPTURA DUPLA", bg="#1d293a", fg="#8ebeff",
                  font=("Segoe UI", 9, "bold")).grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
         self.dual_profile_var = tk.StringVar(value=DUAL_STABLE)
@@ -1140,19 +1338,51 @@ class App(tk.Tk):
     def _second_area_changed(self, _event=None) -> None:
         enabled = self.dual_enabled_var.get()
         usb = enabled and self.second_source_var.get() == USB_B_SOURCE
+        scrcpy = enabled and self.second_source_var.get() == SCRCPY_B_SOURCE
         self.second_source_combo.configure(state="readonly" if enabled else "disabled")
         self.dual_profile_combo.configure(state="readonly" if enabled else "disabled")
-        self.second_combo.configure(state="readonly" if enabled and not usb else "disabled")
-        self.second_area_button.configure(state="normal" if enabled and not usb else "disabled")
+        self.second_combo.configure(state="readonly" if enabled and not (usb or scrcpy) else "disabled")
+        self.second_area_button.configure(state="normal" if enabled and not (usb or scrcpy) else "disabled")
         self.usb_camera_combo.configure(state="readonly" if usb and self.usb_camera_devices else "disabled")
         self.usb_refresh_button.configure(state="normal" if usb and not self.usb_scanning else "disabled")
         for widget in (self.usb_camera_combo, self.usb_refresh_button, self.usb_camera_label):
             widget.grid() if usb else widget.grid_remove()
         for widget in (self.second_combo, self.second_area_button, self.second_area_label):
-            widget.grid_remove() if usb else widget.grid()
+            widget.grid_remove() if (usb or scrcpy) else widget.grid()
+        for widget in (self.scrcpy_path_entry, self.scrcpy_browse_button,
+                       self.scrcpy_facing_combo, self.scrcpy_detect_button, self.scrcpy_hint):
+            widget.grid() if scrcpy else widget.grid_remove()
+        self.scrcpy_path_entry.configure(state='normal' if enabled and scrcpy else 'disabled')
+        self.scrcpy_facing_combo.configure(state='readonly' if enabled and scrcpy else 'disabled')
+        self.scrcpy_browse_button.configure(state='normal' if enabled and scrcpy else 'disabled')
+        self.scrcpy_detect_button.configure(state='normal' if enabled and scrcpy else 'disabled')
         self._update_second_area_label()
         if usb and not self.usb_camera_devices and not self.usb_scanning and not getattr(self, "usb_scanned_once", False) and self.state == "idle":
             self._refresh_usb_cameras()
+
+    def _browse_scrcpy(self) -> None:
+        path = filedialog.askopenfilename(title='Selecione scrcpy.exe',
+                   filetypes=[('scrcpy.exe', 'scrcpy.exe'), ('Executáveis', '*.exe')])
+        if path:
+            self.scrcpy_exe_var.set(path)
+            self.android_usb_ok = False
+            self.scrcpy_hint.configure(text='Clique em Verificar Android USB.')
+
+    def _check_android_usb(self) -> None:
+        if self.state != 'idle':
+            return
+        self.android_usb_ok = False
+        self.scrcpy_detect_button.configure(state='disabled')
+        self.scrcpy_hint.configure(text='Verificando autorização ADB...')
+        value = self.scrcpy_exe_var.get()
+        def worker():
+            try:
+                _scrcpy, adb = locate_scrcpy(value)
+                info = check_usb_android(adb)
+                self.events.put(('android_usb_status', info))
+            except Exception as exc:
+                self.events.put(('android_usb_error', str(exc)))
+        threading.Thread(target=worker, daemon=True, name='android-adb').start()
 
     def _refresh_usb_cameras(self) -> None:
         """Procura dispositivos DirectShow, sem abrir a câmera nem bloquear o Tk."""
@@ -1173,6 +1403,10 @@ class App(tk.Tk):
     def _update_second_area_label(self, _event=None) -> None:
         if not self.dual_enabled_var.get():
             self.second_area_label.configure(text="Segunda captura desligada")
+            return
+        if self.second_source_var.get() == SCRCPY_B_SOURCE:
+            self.scrcpy_hint.configure(text=('Android USB autorizado. Câmera será gravada via scrcpy.'
+                if self.android_usb_ok else 'Selecione scrcpy.exe e verifique a depuração USB.'))
             return
         if self.second_source_var.get() == USB_B_SOURCE:
             name = self.usb_camera_var.get()
@@ -1250,7 +1484,8 @@ class App(tk.Tk):
             crf = preset[1]
         dual = self.dual_enabled_var.get()
         usb = dual and self.second_source_var.get() == USB_B_SOURCE
-        secondary = self._selected_second_screen() if dual and not usb else None
+        scrcpy = dual and self.second_source_var.get() == SCRCPY_B_SOURCE
+        secondary = self._selected_second_screen() if dual and not (usb or scrcpy) else None
         usb_device = self.usb_camera_var.get() if usb else None
         if secondary is not None:
             dual_regions_valid(self._selected_screen(), secondary)
@@ -1259,6 +1494,11 @@ class App(tk.Tk):
                 raise ValueError("Selecione uma câmera USB detectada pelo Windows para a Área B.")
             validate_video_device_name(usb_device)
         webcam_a = None if self.webcam_var.get() == CAMERA_OFF else self.webcam_var.get()
+        scrcpy_path = self.scrcpy_exe_var.get().strip() if scrcpy else None
+        if scrcpy:
+            locate_scrcpy(scrcpy_path)
+            if not self.android_usb_ok:
+                raise ValueError('Clique em Verificar Android USB antes de iniciar a gravação.')
         if usb_device and webcam_a == usb_device:
             raise ValueError("A câmera USB selecionada para B também está ativa como webcam A. Desative uma das opções.")
         fps = int(self.fps_var.get())
@@ -1268,7 +1508,8 @@ class App(tk.Tk):
         return Settings(self._selected_screen(), fps, crf,
                         self.mic_var.get(), self.sys_var.get(), folder,
                         self.encoder_var.get(), webcam_a,
-                        self.separate_tracks_var.get(), secondary, dual_profile, usb_device)
+                        self.separate_tracks_var.get(), secondary, dual_profile, usb_device,
+                        scrcpy_path, self.scrcpy_facing_var.get())
 
     def _set_config_enabled(self, enabled: bool) -> None:
         readonly = "readonly" if enabled else "disabled"
@@ -1283,12 +1524,17 @@ class App(tk.Tk):
             widget.configure(state="normal" if enabled else "disabled")
         dual_enabled = enabled and self.dual_enabled_var.get()
         usb = dual_enabled and self.second_source_var.get() == USB_B_SOURCE
+        scrcpy = dual_enabled and self.second_source_var.get() == SCRCPY_B_SOURCE
         self.second_source_combo.configure(state="readonly" if dual_enabled else "disabled")
-        self.second_combo.configure(state="readonly" if dual_enabled and not usb else "disabled")
-        self.second_area_button.configure(state="normal" if dual_enabled and not usb else "disabled")
+        self.second_combo.configure(state="readonly" if dual_enabled and not (usb or scrcpy) else "disabled")
+        self.second_area_button.configure(state="normal" if dual_enabled and not (usb or scrcpy) else "disabled")
         self.usb_camera_combo.configure(state="readonly" if usb and self.usb_camera_devices else "disabled")
         self.usb_refresh_button.configure(state="normal" if usb and not self.usb_scanning else "disabled")
         self.dual_profile_combo.configure(state="readonly" if dual_enabled else "disabled")
+        self.scrcpy_path_entry.configure(state='normal' if scrcpy else 'disabled')
+        self.scrcpy_browse_button.configure(state='normal' if scrcpy else 'disabled')
+        self.scrcpy_facing_combo.configure(state='readonly' if scrcpy else 'disabled')
+        self.scrcpy_detect_button.configure(state='normal' if scrcpy else 'disabled')
         self.folder_entry.configure(state="normal" if enabled else "disabled")
         self.refresh_windows_button.configure(state="normal" if enabled else "disabled")
         self.recover_button.configure(state="normal" if enabled else "disabled")
@@ -1335,6 +1581,8 @@ class App(tk.Tk):
             self.studio_status.set("Inicie uma gravação antes de desenhar.")
             return
         self._visual_shortcut("toggle_draw")
+        # Se a gravação do Chrome minimizou a interface, voltar ao Chrome
+        # sem desligar a camada de anotação já criada.
         if self.studio_draw_mode and self.engine is not None:
             self._prepare_visible_window(self.engine.settings.area.hwnd)
 
@@ -1363,6 +1611,7 @@ class App(tk.Tk):
             try:
                 overlay.set_drawing(requested)
             except Exception as exc:
+                # Se o Windows recusar a camada de captura, o gravador continua.
                 self.studio_draw_mode = False
                 try:
                     overlay.set_drawing(False)
@@ -1440,7 +1689,7 @@ class App(tk.Tk):
                 if settings.secondary_area is not None and settings.secondary_area.hwnd is not None and window_info(settings.secondary_area.hwnd) is None:
                     raise ValueError("A janela B está fechada ou minimizada.")
                 settings.folder.mkdir(parents=True, exist_ok=True)
-                if shutil.disk_usage(settings.folder).free < (800 if (settings.secondary_area or settings.usb_camera_b) else 400) * 1024 * 1024:
+                if shutil.disk_usage(settings.folder).free < (800 if (settings.secondary_area or settings.usb_camera_b or settings.scrcpy_exe_b) else 400) * 1024 * 1024:
                     raise ValueError("Espaço insuficiente: libere 800 MB para captura dupla ou 400 MB para captura simples.")
             except Exception as exc:
                 messagebox.showerror("Não foi possível iniciar", str(exc))
@@ -1459,7 +1708,9 @@ class App(tk.Tk):
             def start_in_background():
                 engine = None
                 try:
-                    engine = DualRecordingEngine(settings) if (settings.secondary_area or settings.usb_camera_b) else RecordingEngine(settings)
+                    engine = (ScrcpyDualEngine(settings) if settings.scrcpy_exe_b else
+                              DualRecordingEngine(settings) if (settings.secondary_area or settings.usb_camera_b) else
+                              RecordingEngine(settings))
                     engine.start_segment()
                     self.events.put(("started", engine))
                 except Exception as exc:
@@ -1543,7 +1794,7 @@ class App(tk.Tk):
                     self.pause_button.configure(state="normal")
                     self.draw_button.configure(state="normal")
                     recording_label = (f"áreas A + B a {data.settings.fps} FPS"
-                                       if (data.settings.secondary_area or data.settings.usb_camera_b) else
+                                       if (data.settings.secondary_area or data.settings.usb_camera_b or data.settings.scrcpy_exe_b) else
                                        ("janela visível" if data.settings.area.hwnd is not None else "a tela"))
                     self.status_var.set("● Gravando " + recording_label + " • " + data.encoder.label)
                 elif event == "start_error":
@@ -1571,7 +1822,7 @@ class App(tk.Tk):
                         try:
                             self.studio_overlay.save_annotations(
                                 path.with_name(path.stem + '_anotacoes.png'))
-                            # Projeto editável de anotações, sem imagens do desktop.
+                            # Salvar projeto editável v2.6 sem imagens do desktop.
                             self.studio_overlay.save_project(
                                 path.with_name(path.stem + '_anotacoes.gtwproj'))
                         except (OSError, ValueError, MemoryError) as exc:
@@ -1596,6 +1847,15 @@ class App(tk.Tk):
                 elif event == "recovery_error":
                     self._reset()
                     messagebox.showerror("Falha na recuperação", str(data))
+                elif event == 'android_usb_status':
+                    self.android_usb_ok = True
+                    self.scrcpy_detect_button.configure(state='normal')
+                    self.scrcpy_hint.configure(text='Android via USB autorizado — câmera disponível via scrcpy.')
+                    self.status_var.set('USB Android ADB pronto para gravação.')
+                elif event == 'android_usb_error':
+                    self.android_usb_ok = False
+                    self.scrcpy_detect_button.configure(state='normal')
+                    self.scrcpy_hint.configure(text='Não conectado: ' + str(data)[:135])
                 elif event == "usb_cameras":
                     self.usb_scanning = False
                     self.usb_camera_devices = list(data)
@@ -1645,6 +1905,7 @@ class App(tk.Tk):
                         try:
                             self._visual_shortcut(data)
                         except Exception as exc:
+                            # Uma falha de efeito não interrompe a fila de atalhos.
                             self.studio_status.set("Falha na ação de desenho: " + str(exc))
         except queue.Empty:
             pass
@@ -1682,7 +1943,9 @@ class App(tk.Tk):
                     # Speed indica throughput do FFmpeg. FPS de saída isolado não é
                     # uma medida confiável da frequência real da captura de tela.
                     speed_ratio = h.get('speed')
-                    dual = self.engine.settings.secondary_area is not None or self.engine.settings.usb_camera_b is not None
+                    dual = (self.engine.settings.secondary_area is not None or
+                            self.engine.settings.usb_camera_b is not None or
+                            self.engine.settings.scrcpy_exe_b is not None)
                     threshold = 0.97 if dual else 0.85
                     if seconds >= 8 and isinstance(speed_ratio, (int, float)) and 0 < speed_ratio < threshold:
                         self.lento_amostras += 1
