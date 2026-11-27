@@ -10,7 +10,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$Versao = '2.7.0-rc1'
+$Versao = '2.7.0-rc5'
 $PastaOrigem = $PSScriptRoot
 $PastaLocal = Join-Path $env:LOCALAPPDATA 'GravadorTelaWin'
 $PastaPython = Join-Path $PastaLocal 'Runtime\Python312'
@@ -263,7 +263,7 @@ try {
         throw "Preparacao falhou com codigo $retorno. Consulte o diagnostico."
     }
     if ($Acao -eq 'GerarEXE') {
-        Registrar "Executavel criado em: $(Join-Path $PastaLocal 'dist\GravadorTelaWin_v2_5_ESTUDIO_RC2.exe')"
+        Registrar "Executavel criado em: $(Join-Path $PastaLocal 'dist\GravadorTelaWin_v2_7_UI_RC5.exe')"
     }
     else { Registrar 'Aplicativo iniciado a partir do disco local.' }
     Registrar 'RESULTADO: OK'
