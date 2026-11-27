@@ -12,6 +12,8 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 import os
+import re
+import time
 from pathlib import Path
 import shutil
 import subprocess
@@ -89,6 +91,67 @@ def scrcpy_camera_command(scrcpy_exe: Path, destination: Path, *,
             *(('--max-size=1280',) if fluidez else ()),
             '--record=' + str(destination)]
 
+
+
+def scrcpy_log_excerpt(log_path: Path, *, max_chars: int = 650) -> str:
+    """Small actionable excerpt for a local error dialog; complete log is retained.
+
+    The log may include Android device identifiers. Never send it to a server.
+    """
+    try:
+        lines = log_path.read_text(encoding='utf-8', errors='replace').splitlines()
+    except OSError:
+        return 'Log scrcpy ainda não disponível.'
+    relevant = [line.strip() for line in lines
+                if re.search(r'\b(?:ERROR|FATAL|WARN|exception|failed|camera|recording)\b',
+                             line, flags=re.IGNORECASE)]
+    selected = relevant[-4:] if relevant else lines[-4:]
+    return ' | '.join(selected)[-max_chars:] if selected else 'Log scrcpy vazio.'
+
+
+def scrcpy_recording_started(video: Path, log_path: Path) -> bool:
+    """Do not require video data to exceed 1 KB before scrcpy flushes its MKV.
+
+    Accept an explicit scrcpy recording-start message, or enough file bytes.
+    The caller must check the child process is still alive before accepting.
+    """
+    try:
+        if video.is_file() and video.stat().st_size > 1000:
+            return True
+    except OSError:
+        pass
+    try:
+        content = log_path.read_text(encoding='utf-8', errors='replace')[-4096:]
+    except OSError:
+        return False
+    return bool(re.search(r'(?i)\brecording\s+started\s+to\b', content))
+
+
+def wait_for_scrcpy_recording(proc, video: Path, log_path: Path, *,
+                              timeout: float = 25.0, interval: float = .2) -> None:
+    """Allow slow ADB/camera startup, but report the actual child-process error.
+
+    This must not close or minimize the preview: doing so before camera setup
+    finishes can cause avoidable startup failures on some Windows configurations.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        code = proc.poll()
+        if code is not None:
+            raise RuntimeError(
+                f'scrcpy encerrou na inicialização (código {code}). '
+                f'{scrcpy_log_excerpt(log_path)}. Log: {log_path}')
+        if scrcpy_recording_started(video, log_path):
+            return
+        time.sleep(interval)
+    code = proc.poll()
+    if code is not None:
+        raise RuntimeError(
+            f'scrcpy encerrou na inicialização (código {code}). '
+            f'{scrcpy_log_excerpt(log_path)}. Log: {log_path}')
+    raise RuntimeError(
+        f'Câmera B não confirmou início em {timeout:g}s. '
+        f'{scrcpy_log_excerpt(log_path)}. Log: {log_path}')
 
 def _windows_for_pid(pid: int) -> list[int]:
     """Enumerate only windows owned by this process; do not close other apps."""
