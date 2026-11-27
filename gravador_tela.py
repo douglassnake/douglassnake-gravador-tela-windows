@@ -1153,8 +1153,6 @@ class App(tk.Tk):
         self._update_second_area_label()
         if usb and not self.usb_camera_devices and not self.usb_scanning and not getattr(self, "usb_scanned_once", False) and self.state == "idle":
             self._refresh_usb_cameras()
-        elif enabled and not usb and self.second_var.get() == "Área personalizada" and self.selected_area_b is None:
-            self._pick_second_area()
 
     def _refresh_usb_cameras(self) -> None:
         """Procura dispositivos DirectShow, sem abrir a câmera nem bloquear o Tk."""
