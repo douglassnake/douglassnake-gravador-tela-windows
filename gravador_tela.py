@@ -58,11 +58,12 @@ from gravador_v27_ui import ScrollableSettings, initial_window_geometry
 from gravador_v27_scrcpy import (
     SCRCPY_B_SOURCE, CAMERA_FACINGS, locate_scrcpy, check_usb_android,
     scrcpy_camera_command, minimize_preview, request_camera_close, gracefully_stop_camera,
+    scrcpy_log_excerpt, scrcpy_video_readable,
     wait_for_scrcpy_recording,
 )
 import json
 
-APP_NAME = "GravadorTelaWin 2.7 RC5.1 (Estúdio responsivo • Android USB)"
+APP_NAME = "GravadorTelaWin 2.7 RC5.2 (Estúdio responsivo • Android USB)"
 RATE = 48_000
 
 
@@ -709,25 +710,41 @@ class ScrcpyDualEngine(RecordingEngine):
             super().stop_segment()
         finally:
             if self.scrcpy_proc:
-                closed = gracefully_stop_camera(self.scrcpy_proc, timeout=15)
-                if not closed:
-                    # Never claim such an MKV is valid: forced termination may
-                    # leave truncated container metadata. Preserve work directory.
-                    if self.scrcpy_proc.poll() is None:
-                        self.scrcpy_proc.terminate()
-                        try:
-                            self.scrcpy_proc.wait(timeout=3)
-                        except subprocess.TimeoutExpired:
-                            self.scrcpy_proc.kill()
-                    self.warnings.append('scrcpy não finalizou normalmente o segmento B.')
+                proc = self.scrcpy_proc
+                closed = gracefully_stop_camera(proc, timeout=15)
+                if not closed and proc.poll() is None:
+                    # Only terminate this child after normal window-based close
+                    # failed. The MKV may still be usable; retain all originals.
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=3)
+                    self.warnings.append(
+                        'scrcpy exigiu encerramento forçado; verificando a integridade do vídeo B.')
+                exit_code = proc.poll()
                 if self.scrcpy_log:
                     self.scrcpy_log.close()
                 self.scrcpy_proc = None
                 self.scrcpy_log = None
                 b = self.scrcpy_camera_segments.get(idx)
-                if not closed or not b or not b.exists() or b.stat().st_size < 1000:
-                    raise RuntimeError('Câmera B não foi finalizada corretamente; '
-                                       'os arquivos temporários foram preservados.')
+                log_path = self.tempdir / f'scrcpy_{idx:03d}.log'
+                size = b.stat().st_size if b and b.is_file() else 0
+                recovered = False
+                if not closed and b and size >= 1000:
+                    recovered = scrcpy_video_readable(self.ffmpeg, b)
+                    if recovered:
+                        self.warnings.append(
+                            'Área B recuperada após encerramento não confirmado; '
+                            'alguns quadros finais podem ter sido perdidos.')
+                if size < 1000 or (not closed and not recovered):
+                    excerpt = scrcpy_log_excerpt(log_path, max_chars=420)
+                    raise RuntimeError(
+                        f'Câmera B não finalizou. scrcpy código={exit_code}, '
+                        f'MKV={size} bytes, encerramento={"confirmado" if closed else "não confirmado"}. '
+                        f'{excerpt}. Log: {log_path}. '
+                        f'Arquivos temporários preservados em {self.tempdir}')
 
     def finish(self) -> tuple[Path, Path]:
         if self.current is not None:
@@ -988,7 +1005,7 @@ class App(tk.Tk):
         head_left.pack(side="left", fill="x", expand=True)
         tk.Label(head_left, text="VIDEO360  /  GRAVADOR DE TELA", font=("Segoe UI", 16, "bold"),
                  bg="#0b1424", fg="#f5f9ff").pack(anchor="w")
-        tk.Label(head_left, text="ESTÚDIO V2.7 RC5.1   •   Captura local   •   Duas fontes independentes",
+        tk.Label(head_left, text="ESTÚDIO V2.7 RC5.2   •   Captura local   •   Duas fontes independentes",
                  font=("Segoe UI", 9), bg="#0b1424", fg="#96acc7").pack(anchor="w", pady=(4, 0))
         self.header_state_var = tk.StringVar(value="●  PRONTO")
         self.header_state_label = tk.Label(header, textvariable=self.header_state_var,
