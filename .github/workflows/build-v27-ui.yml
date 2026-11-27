@@ -1,10 +1,11 @@
-name: GravadorTelaWin 2.7 RC5 — interface compacta e rolagem
+name: GravadorTelaWin 2.7 RC5.1 — startup scrcpy Android
 on:
   push:
-    branches: [feature/v27-ui-scroll-rc5, fix/v27-rc5-installer-ui]
+    branches: [feature/v27-ui-scroll-rc5, fix/v27-rc5-installer-ui, fix/v27-rc5-scrcpy-startup]
     paths:
       - 'gravador_tela.py'
       - 'gravador_v27_ui.py'
+      - 'gravador_v27_scrcpy.py'
       - 'tests/**'
       - 'preparar_ambiente.py'
       - 'INSTALAR.ps1'
@@ -38,13 +39,13 @@ jobs:
       - name: Compilar executavel independente Windows x64
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name GravadorTelaWin_v2_7_UI_RC5 --collect-all imageio_ffmpeg --collect-all soundcard --collect-all comtypes --hidden-import comtypes --hidden-import comtypes.client gravador_tela.py
-          if (!(Test-Path 'dist/GravadorTelaWin_v2_7_UI_RC5.exe')) { throw 'Executavel RC5 nao gerado' }
-          Get-FileHash 'dist/GravadorTelaWin_v2_7_UI_RC5.exe' -Algorithm SHA256
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name GravadorTelaWin_v2_7_UI_RC5_1 --collect-all imageio_ffmpeg --collect-all soundcard --collect-all comtypes --hidden-import comtypes --hidden-import comtypes.client gravador_tela.py
+          if (!(Test-Path 'dist/GravadorTelaWin_v2_7_UI_RC5_1.exe')) { throw 'Executavel RC5 nao gerado' }
+          Get-FileHash 'dist/GravadorTelaWin_v2_7_UI_RC5_1.exe' -Algorithm SHA256
       - name: Publicar executavel RC5 Windows
         uses: actions/upload-artifact@v4
         with:
-          name: GravadorTelaWin-v2.7-RC5-Interface-Rolagem-Windows-x64
-          path: dist/GravadorTelaWin_v2_7_UI_RC5.exe
+          name: GravadorTelaWin-v2.7-RC5.1-Scrcpy-Startup-Windows-x64
+          path: dist/GravadorTelaWin_v2_7_UI_RC5_1.exe
           if-no-files-found: error
           retention-days: 30

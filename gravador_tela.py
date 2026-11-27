@@ -58,10 +58,11 @@ from gravador_v27_ui import ScrollableSettings, initial_window_geometry
 from gravador_v27_scrcpy import (
     SCRCPY_B_SOURCE, CAMERA_FACINGS, locate_scrcpy, check_usb_android,
     scrcpy_camera_command, minimize_preview, request_camera_close, gracefully_stop_camera,
+    wait_for_scrcpy_recording,
 )
 import json
 
-APP_NAME = "GravadorTelaWin 2.7 RC5 (Estúdio responsivo • Android USB)"
+APP_NAME = "GravadorTelaWin 2.7 RC5.1 (Estúdio responsivo • Android USB)"
 RATE = 48_000
 
 
@@ -657,18 +658,12 @@ class ScrcpyDualEngine(RecordingEngine):
                 creationflags=(getattr(subprocess, 'CREATE_NO_WINDOW', 0)
                                if sys.platform == 'win32' else 0))
             self.scrcpy_proc, self.scrcpy_log, self.scrcpy_camera_file = process, log, camera_file
-            # Wait for camera recording to initialize, not just for Popen to return.
-            camera_ready = False
-            for _ in range(50):
-                if process.poll() is not None:
-                    break
-                minimize_preview(process)
-                if camera_file.is_file() and camera_file.stat().st_size > 1000:
-                    camera_ready = True
-                    break
-                time.sleep(0.2)
-            if not camera_ready:
-                raise RuntimeError('O scrcpy não iniciou a gravação da câmera B. Consulte o log temporário.')
+            # Camera H.264 packets may remain buffered before MKV file growth.
+            # Wait for recording confirmation or real output, without repeatedly
+            # minimizing the window while scrcpy initializes.
+            wait_for_scrcpy_recording(process, camera_file,
+                                      self.tempdir / f'scrcpy_{idx:03d}.log')
+            minimize_preview(process)  # only after recording startup
             self.scrcpy_camera_segments[idx] = camera_file
             self.scrcpy_timing.append({'segmento': idx,
                 'inicio_b_apos_a_segundos_estimado': round(started - self.current.started_at, 3),
@@ -993,7 +988,7 @@ class App(tk.Tk):
         head_left.pack(side="left", fill="x", expand=True)
         tk.Label(head_left, text="VIDEO360  /  GRAVADOR DE TELA", font=("Segoe UI", 16, "bold"),
                  bg="#0b1424", fg="#f5f9ff").pack(anchor="w")
-        tk.Label(head_left, text="ESTÚDIO V2.7 RC5   •   Captura local   •   Duas fontes independentes",
+        tk.Label(head_left, text="ESTÚDIO V2.7 RC5.1   •   Captura local   •   Duas fontes independentes",
                  font=("Segoe UI", 9), bg="#0b1424", fg="#96acc7").pack(anchor="w", pady=(4, 0))
         self.header_state_var = tk.StringVar(value="●  PRONTO")
         self.header_state_label = tk.Label(header, textvariable=self.header_state_var,
@@ -1889,7 +1884,7 @@ class App(tk.Tk):
                 elif event == 'android_usb_status':
                     self.android_usb_ok = True
                     self.scrcpy_detect_button.configure(state='normal')
-                    self.scrcpy_hint.configure(text='Android via USB autorizado — câmera disponível via scrcpy.')
+                    self.scrcpy_hint.configure(text='Android USB autorizado — câmera será testada ao iniciar gravação.')
                     self.status_var.set('USB Android ADB pronto para gravação.')
                 elif event == 'android_usb_error':
                     self.android_usb_ok = False
