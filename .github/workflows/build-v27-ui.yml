@@ -1,7 +1,7 @@
 name: GravadorTelaWin 2.7 RC5 — interface compacta e rolagem
 on:
   push:
-    branches: [feature/v27-ui-scroll-rc5]
+    branches: [feature/v27-ui-scroll-rc5, fix/v27-rc5-installer-ui]
     paths:
       - 'gravador_tela.py'
       - 'gravador_v27_ui.py'
