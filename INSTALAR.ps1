@@ -36,7 +36,7 @@ function Registrar([string]$Mensagem) {
 function Copiar-Programa() {
     Registrar "Origem: $PastaOrigem"
     Registrar "Destino local: $PastaLocal"
-    foreach ($nome in @('gravador_tela.py','gravador_v2_utils.py','gravador_v21_perf.py','gravador_v22_studio.py','gravador_v23_overlay.py','gravador_v24_history.py','gravador_v25_export.py','gravador_v26_project.py','gravador_v27_dual.py','gravador_v27_perf.py','preparar_ambiente.py','requirements.txt','verificar_python.py')) {
+    foreach ($nome in @('gravador_tela.py','gravador_v2_utils.py','gravador_v21_perf.py','gravador_v22_studio.py','gravador_v23_overlay.py','gravador_v24_history.py','gravador_v25_export.py','gravador_v26_project.py','gravador_v27_dual.py','gravador_v27_perf.py','gravador_v27_usb_camera.py','preparar_ambiente.py','requirements.txt','verificar_python.py')) {
         $origem = Join-Path $PastaOrigem $nome
         $destino = Join-Path $PastaLocal $nome
         if (-not (Test-Path -LiteralPath $origem -PathType Leaf)) {

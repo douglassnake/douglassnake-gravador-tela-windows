@@ -251,13 +251,13 @@ def launch_app():
 def build_exe():
     args = [
         str(EXE), '-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile', '--windowed',
-        '--name', 'GravadorTelaWin_v2_7_DUAL_RC2', '--collect-all', 'imageio_ffmpeg',
+        '--name', 'GravadorTelaWin_v2_7_USB_RC3', '--collect-all', 'imageio_ffmpeg',
         '--collect-all', 'soundcard', '--collect-all', 'comtypes',
         '--hidden-import', 'comtypes', '--hidden-import', 'comtypes.client',
         str(SOURCE),
     ]
     ok, _ = shell(args, 'Gerar .exe com PyInstaller', timeout=1800)
-    result = ROOT / 'dist' / 'GravadorTelaWin_v2_7_DUAL_RC2.exe'
+    result = ROOT / 'dist' / 'GravadorTelaWin_v2_7_USB_RC3.exe'
     if not ok or not result.exists():
         raise SetupError('Erro na compilacao do executavel. Consulte diagnostico_instalacao.log.')
     report('\nEXE criado em: ' + str(result))

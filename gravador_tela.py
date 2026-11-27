@@ -49,8 +49,13 @@ from gravador_v27_perf import (
     dual_cpu_options, synthetic_dual_probe, dual_diagnostic,
 )
 from gravador_v21_perf import EncoderChoice, encoder_arguments
+from gravador_v27_usb_camera import (
+    USB_B_SOURCE, WINDOWS_B_SOURCE, usb_camera_capture_command,
+    list_usb_camera_devices, camera_matches_mobile,
+    estimated_camera_region, validate_video_device_name,
+)
 
-APP_NAME = "GravadorTelaWin 2.7 RC2 (Captura dupla estável)"
+APP_NAME = "GravadorTelaWin 2.7 RC3 (Câmera USB na Área B)"
 RATE = 48_000
 
 
@@ -90,6 +95,7 @@ class Settings:
     separate_audio_tracks: bool = False
     secondary_area: Screen | None = None
     dual_profile: str = DUAL_ORIGINAL
+    usb_camera_b: str | None = None
 
 
 class AudioCapture:
@@ -471,15 +477,23 @@ class DualRecordingEngine(RecordingEngine):
     Audio is captured once per segment, then reused for both export files.
     """
     def __init__(self, settings: Settings):
-        if settings.secondary_area is None:
-            raise ValueError("Área B não configurada")
-        dual_regions_valid(settings.area, settings.secondary_area)
+        if bool(settings.secondary_area) == bool(settings.usb_camera_b):
+            raise ValueError("Defina somente uma fonte B: região ou câmera USB")
+        if settings.secondary_area is not None:
+            dual_regions_valid(settings.area, settings.secondary_area)
+        if settings.usb_camera_b is not None:
+            validate_video_device_name(settings.usb_camera_b)
+            if settings.usb_camera_b == settings.webcam_device:
+                raise ValueError("A mesma câmera não pode ser usada na Área B e na sobreposição A")
         super().__init__(settings)
         self.dual_segments_metrics: list[dict] = []
         self.dual_profile = dual_config(settings.dual_profile, settings.fps)
+        # A resolução nativa da webcam USB pode variar; usa 720p como
+        # carga de referência, sem alegar ter detectado o formato real.
+        probe_b = settings.secondary_area or estimated_camera_region()
         self.dual_preflight = synthetic_dual_probe(
             self.ffmpeg, self.encoder.codec, self.encoder.options,
-            self.dual_profile, settings.area, settings.secondary_area)
+            self.dual_profile, settings.area, probe_b)
         # The old encoder selector measures only one stream; two encodes may
         # exceed the available hardware's throughput or session limits.
         if settings.encoder_preference == 'Automático' and (
@@ -488,7 +502,7 @@ class DualRecordingEngine(RecordingEngine):
                 cpu_options = encoder_arguments('libx264', settings.crf)
                 cpu_preflight = synthetic_dual_probe(
                     self.ffmpeg, 'libx264', cpu_options, self.dual_profile,
-                    settings.area, settings.secondary_area)
+                    settings.area, probe_b)
                 if cpu_preflight['ok'] and (not self.dual_preflight['ok'] or
                         cpu_preflight['speed'] > self.dual_preflight['speed'] * 1.08):
                     self.encoder = EncoderChoice('libx264', 'CPU (compatível)', cpu_options)
@@ -502,8 +516,16 @@ class DualRecordingEngine(RecordingEngine):
                 'Pode haver cortes; use áreas menores ou perfil Fluidez.')
 
     def _ffmpeg_command(self, path: Path) -> list[str]:
-        assert self.settings.secondary_area is not None
         codec = self.encoder.codec
+        if self.settings.usb_camera_b:
+            return usb_camera_capture_command(
+                self.ffmpeg, self.settings.area, self.settings.usb_camera_b,
+                self.settings.fps, codec, self.encoder.options,
+                getattr(self, "_progress_path", path.with_suffix(".progress")), path,
+                webcam_a=self.settings.webcam_device,
+                profile=self.settings.dual_profile,
+            )
+        assert self.settings.secondary_area is not None
         return dual_capture_command(
             self.ffmpeg, self.settings.area, self.settings.secondary_area,
             self.settings.fps, codec, self.encoder.options,
@@ -577,7 +599,8 @@ class DualRecordingEngine(RecordingEngine):
                             getattr(getattr(self, 'encoder', None), 'codec', 'libx264'),
                             self.settings.area, self.settings.secondary_area,
                             getattr(self, 'dual_preflight', {}), self.warnings,
-                            getattr(self, 'dual_segments_metrics', []))
+                            getattr(self, 'dual_segments_metrics', []),
+                            source_b='usb_camera' if self.settings.usb_camera_b else 'desktop_region')
         except (OSError, ValueError) as exc:
             # Sidecar error must never invalidate either finished MP4.
             self.warnings.append('Relatório da captura dupla não salvo: ' + str(exc))
@@ -736,6 +759,8 @@ class App(tk.Tk):
         self.engine: RecordingEngine | None = None
         self.selected_area: Screen | None = None
         self.selected_area_b: Screen | None = None
+        self.usb_camera_devices: list[str] = []
+        self.usb_scanning = False
         self.window_lookup: dict[str, int] = {}
         self.preview_photo: ImageTk.PhotoImage | None = None
         self.recorded_sec = 0.0
@@ -814,9 +839,13 @@ class App(tk.Tk):
                                           variable=self.dual_enabled_var, command=self._second_area_changed,
                                           style="Dark.TCheckbutton")
         self.dual_check.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 7))
-        tk.Label(dual_box, text="ÁREA B — monitor, janela ou recorte independente",
-                 bg="#1d293a", fg="#8ebeff", font=("Segoe UI", 9, "bold")).grid(
-                     row=1, column=0, columnspan=3, sticky="w")
+        self.second_source_var = tk.StringVar(value=WINDOWS_B_SOURCE)
+        self.second_source_combo = ttk.Combobox(
+            dual_box, textvariable=self.second_source_var,
+            values=(WINDOWS_B_SOURCE, USB_B_SOURCE),
+            state="disabled", style="Dark.TCombobox", font=("Segoe UI", 10))
+        self.second_source_combo.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 7), ipady=3)
+        self.second_source_combo.bind("<<ComboboxSelected>>", self._second_area_changed)
         self.second_var = tk.StringVar(value=self.screens[2].name if len(self.screens) > 2 else "Área personalizada")
         self.second_combo = ttk.Combobox(dual_box, textvariable=self.second_var,
                                           values=[s.name for s in self.screens] + ["Área personalizada"] + list(self.window_lookup),
@@ -830,6 +859,22 @@ class App(tk.Tk):
         self.second_area_label = tk.Label(dual_box, text="Segunda captura desligada",
                                           bg="#1d293a", fg="#9ca3af", font=("Segoe UI", 9))
         self.second_area_label.grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        self.usb_camera_var = tk.StringVar(value="")
+        self.usb_camera_combo = ttk.Combobox(dual_box, textvariable=self.usb_camera_var,
+            values=[], state="disabled", style="Dark.TCombobox", font=("Segoe UI", 10))
+        self.usb_camera_combo.grid(row=2, column=0, sticky="ew", padx=(0, 8), pady=(5, 0), ipady=3)
+        self.usb_camera_combo.bind("<<ComboboxSelected>>", self._update_second_area_label)
+        self.usb_refresh_button = tk.Button(dual_box, text="Detectar câmera USB",
+            command=self._refresh_usb_cameras, bg="#334963", fg="white",
+            relief="flat", cursor="hand2", padx=8, pady=7, state="disabled")
+        self.usb_refresh_button.grid(row=2, column=1, sticky="ew", pady=(5, 0))
+        self.usb_camera_label = tk.Label(dual_box,
+            text="Conecte o celular, selecione Webcam USB no aparelho e detecte a câmera.",
+            bg="#1d293a", fg="#9ca3af", font=("Segoe UI", 9), anchor="w")
+        self.usb_camera_label.grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        self.usb_camera_combo.grid_remove()
+        self.usb_refresh_button.grid_remove()
+        self.usb_camera_label.grid_remove()
         tk.Label(dual_box, text="DESEMPENHO DA CAPTURA DUPLA", bg="#1d293a", fg="#8ebeff",
                  font=("Segoe UI", 9, "bold")).grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
         self.dual_profile_var = tk.StringVar(value=DUAL_STABLE)
@@ -1094,16 +1139,47 @@ class App(tk.Tk):
 
     def _second_area_changed(self, _event=None) -> None:
         enabled = self.dual_enabled_var.get()
-        self.second_combo.configure(state="readonly" if enabled else "disabled")
-        self.second_area_button.configure(state="normal" if enabled else "disabled")
+        usb = enabled and self.second_source_var.get() == USB_B_SOURCE
+        self.second_source_combo.configure(state="readonly" if enabled else "disabled")
         self.dual_profile_combo.configure(state="readonly" if enabled else "disabled")
+        self.second_combo.configure(state="readonly" if enabled and not usb else "disabled")
+        self.second_area_button.configure(state="normal" if enabled and not usb else "disabled")
+        self.usb_camera_combo.configure(state="readonly" if usb and self.usb_camera_devices else "disabled")
+        self.usb_refresh_button.configure(state="normal" if usb and not self.usb_scanning else "disabled")
+        for widget in (self.usb_camera_combo, self.usb_refresh_button, self.usb_camera_label):
+            widget.grid() if usb else widget.grid_remove()
+        for widget in (self.second_combo, self.second_area_button, self.second_area_label):
+            widget.grid_remove() if usb else widget.grid()
         self._update_second_area_label()
-        if enabled and self.second_var.get() == "Área personalizada" and self.selected_area_b is None:
-            self._pick_second_area()
+        if usb and not self.usb_camera_devices and not self.usb_scanning and not getattr(self, "usb_scanned_once", False) and self.state == "idle":
+            self._refresh_usb_cameras()
 
-    def _update_second_area_label(self) -> None:
+    def _refresh_usb_cameras(self) -> None:
+        """Procura dispositivos DirectShow, sem abrir a câmera nem bloquear o Tk."""
+        if self.state != "idle" or self.usb_scanning:
+            return
+        self.usb_scanning = True
+        self.usb_scanned_once = True
+        self.usb_refresh_button.configure(state="disabled")
+        self.usb_camera_label.configure(text="Procurando câmeras reconhecidas pelo Windows...")
+        def work():
+            try:
+                found = list_usb_camera_devices(imageio_ffmpeg.get_ffmpeg_exe())
+                self.events.put(("usb_cameras", found))
+            except Exception as exc:
+                self.events.put(("usb_camera_error", str(exc)))
+        threading.Thread(target=work, daemon=True, name="usb-cameras").start()
+
+    def _update_second_area_label(self, _event=None) -> None:
         if not self.dual_enabled_var.get():
             self.second_area_label.configure(text="Segunda captura desligada")
+            return
+        if self.second_source_var.get() == USB_B_SOURCE:
+            name = self.usb_camera_var.get()
+            hint = " (nome sugere celular)" if camera_matches_mobile(name) else ""
+            self.usb_camera_label.configure(text=("Câmera B: " + name + hint + " • dispositivo DirectShow"
+                if name in self.usb_camera_devices else
+                "Nenhuma câmera selecionada. Ative Webcam USB no celular e clique em Detectar."))
             return
         try:
             second = self._selected_second_screen()
@@ -1172,18 +1248,27 @@ class App(tk.Tk):
         preset = PROFILE_PRESETS.get(self.profile_var.get())
         if preset and int(self.fps_var.get()) == preset[0]:
             crf = preset[1]
-        secondary = self._selected_second_screen() if self.dual_enabled_var.get() else None
+        dual = self.dual_enabled_var.get()
+        usb = dual and self.second_source_var.get() == USB_B_SOURCE
+        secondary = self._selected_second_screen() if dual and not usb else None
+        usb_device = self.usb_camera_var.get() if usb else None
         if secondary is not None:
             dual_regions_valid(self._selected_screen(), secondary)
+        if usb:
+            if not usb_device or usb_device not in self.usb_camera_devices:
+                raise ValueError("Selecione uma câmera USB detectada pelo Windows para a Área B.")
+            validate_video_device_name(usb_device)
+        webcam_a = None if self.webcam_var.get() == CAMERA_OFF else self.webcam_var.get()
+        if usb_device and webcam_a == usb_device:
+            raise ValueError("A câmera USB selecionada para B também está ativa como webcam A. Desative uma das opções.")
         fps = int(self.fps_var.get())
-        dual_profile = self.dual_profile_var.get() if secondary is not None else DUAL_ORIGINAL
-        if secondary is not None:
+        dual_profile = self.dual_profile_var.get() if dual else DUAL_ORIGINAL
+        if dual:
             fps = dual_config(dual_profile, fps).capture_fps
         return Settings(self._selected_screen(), fps, crf,
                         self.mic_var.get(), self.sys_var.get(), folder,
-                        self.encoder_var.get(),
-                        None if self.webcam_var.get() == CAMERA_OFF else self.webcam_var.get(),
-                        self.separate_tracks_var.get(), secondary, dual_profile)
+                        self.encoder_var.get(), webcam_a,
+                        self.separate_tracks_var.get(), secondary, dual_profile, usb_device)
 
     def _set_config_enabled(self, enabled: bool) -> None:
         readonly = "readonly" if enabled else "disabled"
@@ -1194,11 +1279,15 @@ class App(tk.Tk):
         for widget in [self.mic_check, self.sys_check, self.separate_tracks_check,
                        self.webcam_button, self.area_button, self.browse_button,
                        self.highlight_check, self.clicks_check, self.zoom_check,
-                       self.dual_check]:
+                       self.dual_check, self.usb_refresh_button]:
             widget.configure(state="normal" if enabled else "disabled")
         dual_enabled = enabled and self.dual_enabled_var.get()
-        self.second_combo.configure(state="readonly" if dual_enabled else "disabled")
-        self.second_area_button.configure(state="normal" if dual_enabled else "disabled")
+        usb = dual_enabled and self.second_source_var.get() == USB_B_SOURCE
+        self.second_source_combo.configure(state="readonly" if dual_enabled else "disabled")
+        self.second_combo.configure(state="readonly" if dual_enabled and not usb else "disabled")
+        self.second_area_button.configure(state="normal" if dual_enabled and not usb else "disabled")
+        self.usb_camera_combo.configure(state="readonly" if usb and self.usb_camera_devices else "disabled")
+        self.usb_refresh_button.configure(state="normal" if usb and not self.usb_scanning else "disabled")
         self.dual_profile_combo.configure(state="readonly" if dual_enabled else "disabled")
         self.folder_entry.configure(state="normal" if enabled else "disabled")
         self.refresh_windows_button.configure(state="normal" if enabled else "disabled")
@@ -1351,7 +1440,7 @@ class App(tk.Tk):
                 if settings.secondary_area is not None and settings.secondary_area.hwnd is not None and window_info(settings.secondary_area.hwnd) is None:
                     raise ValueError("A janela B está fechada ou minimizada.")
                 settings.folder.mkdir(parents=True, exist_ok=True)
-                if shutil.disk_usage(settings.folder).free < (800 if settings.secondary_area else 400) * 1024 * 1024:
+                if shutil.disk_usage(settings.folder).free < (800 if (settings.secondary_area or settings.usb_camera_b) else 400) * 1024 * 1024:
                     raise ValueError("Espaço insuficiente: libere 800 MB para captura dupla ou 400 MB para captura simples.")
             except Exception as exc:
                 messagebox.showerror("Não foi possível iniciar", str(exc))
@@ -1370,7 +1459,7 @@ class App(tk.Tk):
             def start_in_background():
                 engine = None
                 try:
-                    engine = DualRecordingEngine(settings) if settings.secondary_area else RecordingEngine(settings)
+                    engine = DualRecordingEngine(settings) if (settings.secondary_area or settings.usb_camera_b) else RecordingEngine(settings)
                     engine.start_segment()
                     self.events.put(("started", engine))
                 except Exception as exc:
@@ -1454,7 +1543,7 @@ class App(tk.Tk):
                     self.pause_button.configure(state="normal")
                     self.draw_button.configure(state="normal")
                     recording_label = (f"áreas A + B a {data.settings.fps} FPS"
-                                       if data.settings.secondary_area else
+                                       if (data.settings.secondary_area or data.settings.usb_camera_b) else
                                        ("janela visível" if data.settings.area.hwnd is not None else "a tela"))
                     self.status_var.set("● Gravando " + recording_label + " • " + data.encoder.label)
                 elif event == "start_error":
@@ -1507,6 +1596,23 @@ class App(tk.Tk):
                 elif event == "recovery_error":
                     self._reset()
                     messagebox.showerror("Falha na recuperação", str(data))
+                elif event == "usb_cameras":
+                    self.usb_scanning = False
+                    self.usb_camera_devices = list(data)
+                    self.usb_camera_combo.configure(values=self.usb_camera_devices)
+                    current = self.usb_camera_var.get()
+                    if current not in self.usb_camera_devices:
+                        matches = [x for x in self.usb_camera_devices if camera_matches_mobile(x)]
+                        self.usb_camera_var.set(matches[0] if len(matches) == 1 else "")
+                    self._second_area_changed()
+                    self._update_second_area_label()
+                elif event == "usb_camera_error":
+                    self.usb_scanning = False
+                    self.usb_camera_devices = []
+                    self.usb_camera_var.set("")
+                    self.usb_camera_combo.configure(values=[])
+                    self._second_area_changed()
+                    self.usb_camera_label.configure(text="Falha ao detectar câmera USB: " + str(data)[:150])
                 elif event == "webcams":
                     self.webcam_combo.configure(values=[CAMERA_OFF] + data)
                     if self.webcam_var.get() not in [CAMERA_OFF] + data:
@@ -1576,7 +1682,7 @@ class App(tk.Tk):
                     # Speed indica throughput do FFmpeg. FPS de saída isolado não é
                     # uma medida confiável da frequência real da captura de tela.
                     speed_ratio = h.get('speed')
-                    dual = self.engine.settings.secondary_area is not None
+                    dual = self.engine.settings.secondary_area is not None or self.engine.settings.usb_camera_b is not None
                     threshold = 0.97 if dual else 0.85
                     if seconds >= 8 and isinstance(speed_ratio, (int, float)) and 0 < speed_ratio < threshold:
                         self.lento_amostras += 1
