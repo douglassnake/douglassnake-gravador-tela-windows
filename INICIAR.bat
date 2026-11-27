@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-title Gravador de Tela Windows v2.7 RC4 - inicializacao
+title Gravador de Tela Windows v2.7 RC5 - inicializacao
 REM Usa caminho absoluto: funciona mesmo aberto de pasta de rede (UNC).
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0INSTALAR.ps1" -Acao Iniciar
 if not errorlevel 1 exit /b 0

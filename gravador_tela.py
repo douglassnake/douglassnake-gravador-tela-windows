@@ -54,13 +54,14 @@ from gravador_v27_usb_camera import (
     list_usb_camera_devices, camera_matches_mobile,
     estimated_camera_region, validate_video_device_name,
 )
+from gravador_v27_ui import ScrollableSettings, initial_window_geometry
 from gravador_v27_scrcpy import (
     SCRCPY_B_SOURCE, CAMERA_FACINGS, locate_scrcpy, check_usb_android,
     scrcpy_camera_command, minimize_preview, request_camera_close, gracefully_stop_camera,
 )
 import json
 
-APP_NAME = "GravadorTelaWin 2.7 RC4 (Android scrcpy USB)"
+APP_NAME = "GravadorTelaWin 2.7 RC5 (Estúdio responsivo • Android USB)"
 RATE = 48_000
 
 
@@ -928,8 +929,11 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_NAME)
-        self.geometry("1040x1110")
-        self.minsize(890, 890)
+        # A altura respeita a tela física; apenas o formulário faz scroll.
+        initial_width, initial_height = initial_window_geometry(
+            self.winfo_screenwidth(), self.winfo_screenheight())
+        self.geometry(f"{initial_width}x{initial_height}")
+        self.minsize(900, 560)
         self.configure(bg="#111827")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.events: queue.Queue = queue.Queue()
@@ -972,20 +976,48 @@ class App(tk.Tk):
     def _build_ui(self) -> None:
         style = ttk.Style()
         style.theme_use("clam")
+        style.configure("Studio.Vertical.TScrollbar", background="#3d5977", troughcolor="#101d30",
+                        arrowcolor="#edf6ff", borderwidth=0, width=13)
+        style.map("Studio.Vertical.TScrollbar", background=[("active", "#5481a7")])
+        style.configure("Studio.TEntry", fieldbackground="#283449", foreground="#f8fafc",
+                        insertcolor="#f8fafc", borderwidth=1, padding=5)
         style.configure("Dark.TCombobox", fieldbackground="#283449", background="#283449", foreground="white", arrowcolor="white", borderwidth=0)
         style.map("Dark.TCombobox", fieldbackground=[("readonly", "#283449")], foreground=[("readonly", "white")])
         style.configure("Dark.TCheckbutton", background="#1d293a", foreground="white", font=("Segoe UI", 10))
         style.map("Dark.TCheckbutton", background=[("active", "#1d293a")], foreground=[("disabled", "#7f899b")])
 
-        main = tk.Frame(self, bg="#111827", padx=23, pady=18)
-        main.pack(fill="both", expand=True)
-        tk.Label(main, text="GRAVADOR DE TELA • ESTÚDIO V2.7 RC1", font=("Segoe UI", 20, "bold"), bg="#111827", fg="#f9fafb").pack(anchor="w")
-        tk.Label(main, text="Windows 10/11  •  MP4  •  Captura local, sem envio para a nuvem",
-                 font=("Segoe UI", 10), bg="#111827", fg="#9ca3af").pack(anchor="w", pady=(1, 17))
+        # Cabeçalho e barra de ações são fixos. Apenas as configurações rolam.
+        header = tk.Frame(self, bg="#0b1424", padx=23, pady=13)
+        header.pack(side="top", fill="x")
+        head_left = tk.Frame(header, bg="#0b1424")
+        head_left.pack(side="left", fill="x", expand=True)
+        tk.Label(head_left, text="VIDEO360  /  GRAVADOR DE TELA", font=("Segoe UI", 16, "bold"),
+                 bg="#0b1424", fg="#f5f9ff").pack(anchor="w")
+        tk.Label(head_left, text="ESTÚDIO V2.7 RC5   •   Captura local   •   Duas fontes independentes",
+                 font=("Segoe UI", 9), bg="#0b1424", fg="#96acc7").pack(anchor="w", pady=(4, 0))
+        self.header_state_var = tk.StringVar(value="●  PRONTO")
+        self.header_state_label = tk.Label(header, textvariable=self.header_state_var,
+            bg="#16293b", fg="#61d8a2", padx=13, pady=7, font=("Segoe UI", 9, "bold"))
+        self.header_state_label.pack(side="right", padx=(12, 0))
+        tk.Frame(self, bg="#38bdf8", height=2).pack(side="top", fill="x")
 
-        box = tk.Frame(main, bg="#1d293a", padx=20, pady=17)
-        box.pack(fill="x")
-        tk.Label(box, text="O QUE GRAVAR", bg="#1d293a", fg="#8ebeff", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 9))
+        dock = tk.Frame(self, bg="#101d30", padx=22, pady=10,
+                        highlightthickness=1, highlightbackground="#2a425f")
+        dock.pack(side="bottom", fill="x")
+        self.scroll_panel = ScrollableSettings(self, background="#0c1424")
+        self.scroll_panel.pack(side="top", fill="both", expand=True)
+        main = self.scroll_panel.content
+        intro = tk.Frame(main, bg="#0c1424")
+        intro.pack(fill="x", pady=(0, 9))
+        tk.Label(intro, text="CONFIGURE SUA GRAVAÇÃO", font=("Segoe UI", 12, "bold"),
+                 bg="#0c1424", fg="#e5f0ff").pack(side="left")
+        tk.Label(intro, text="Rolar para ver mais  ↕", font=("Segoe UI", 9),
+                 bg="#0c1424", fg="#8ea5bf").pack(side="right")
+
+        box = tk.Frame(main, bg="#1d293a", padx=18, pady=13, highlightthickness=1,
+                       highlightbackground="#30455e")
+        box.pack(fill="x", pady=(0, 9))
+        tk.Label(box, text="01   ÁREA A  /  CAPTURA DO COMPUTADOR", bg="#1d293a", fg="#8ebeff", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 9))
         self.screen_var = tk.StringVar(value=self.screens[1].name)
         self.screen_combo = ttk.Combobox(box, textvariable=self.screen_var,
                                           values=[s.name for s in self.screens] + ["Área personalizada"],
@@ -1012,10 +1044,11 @@ class App(tk.Tk):
         self._refresh_window_choices(keep_selection=False)
         self._update_area_label()
 
-        dual_box = tk.Frame(main, bg="#1d293a", padx=20, pady=11)
-        dual_box.pack(fill="x", pady=(10, 0))
+        dual_box = tk.Frame(main, bg="#1d293a", padx=18, pady=11, highlightthickness=1,
+                            highlightbackground="#30455e")
+        dual_box.pack(fill="x", pady=(0, 9))
         self.dual_enabled_var = tk.BooleanVar(value=False)
-        self.dual_check = ttk.Checkbutton(dual_box, text="Gravar duas áreas simultaneamente (2 MP4)",
+        self.dual_check = ttk.Checkbutton(dual_box, text="02   ATIVAR ÁREA B  •  Gravar duas fontes (2 MP4)",
                                           variable=self.dual_enabled_var, command=self._second_area_changed,
                                           style="Dark.TCheckbutton")
         self.dual_check.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 7))
@@ -1056,7 +1089,7 @@ class App(tk.Tk):
         self.usb_refresh_button.grid_remove()
         self.usb_camera_label.grid_remove()
         self.scrcpy_exe_var = tk.StringVar(value=shutil.which('scrcpy.exe') or '')
-        self.scrcpy_path_entry = ttk.Entry(dual_box, textvariable=self.scrcpy_exe_var)
+        self.scrcpy_path_entry = ttk.Entry(dual_box, textvariable=self.scrcpy_exe_var, style="Studio.TEntry")
         self.scrcpy_path_entry.grid(row=2, column=0, sticky='ew', padx=(0, 8), pady=(5, 0))
         self.scrcpy_browse_button = tk.Button(dual_box, text='Selecionar scrcpy.exe',
              command=self._browse_scrcpy, bg='#334963', fg='white', relief='flat', padx=8, pady=7)
@@ -1070,26 +1103,27 @@ class App(tk.Tk):
         self.scrcpy_detect_button.grid(row=3, column=1, sticky='ew')
         self.scrcpy_hint = tk.Label(dual_box, text='Conecte o Android por USB com depuração autorizada.',
             bg='#1d293a', fg='#9ca3af', font=('Segoe UI', 9))
-        self.scrcpy_hint.grid(row=3, column=2, sticky='w')
+        self.scrcpy_hint.grid(row=4, column=0, columnspan=3, sticky='w', pady=(6, 0))
         for widget in (self.scrcpy_path_entry, self.scrcpy_browse_button,
                        self.scrcpy_facing_combo, self.scrcpy_detect_button, self.scrcpy_hint):
             widget.grid_remove()
-        tk.Label(dual_box, text="DESEMPENHO DA CAPTURA DUPLA", bg="#1d293a", fg="#8ebeff",
-                 font=("Segoe UI", 9, "bold")).grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        tk.Label(dual_box, text="DESEMPENHO  /  CAPTURA DUPLA", bg="#1d293a", fg="#8ebeff",
+                 font=("Segoe UI", 9, "bold")).grid(row=5, column=0, columnspan=3, sticky="w", pady=(8, 0))
         self.dual_profile_var = tk.StringVar(value=DUAL_STABLE)
         self.dual_profile_combo = ttk.Combobox(dual_box, textvariable=self.dual_profile_var,
                                                values=DUAL_PROFILES, state="disabled",
                                                style="Dark.TCombobox", font=("Segoe UI", 10))
-        self.dual_profile_combo.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(4, 0), ipady=3)
+        self.dual_profile_combo.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(4, 0), ipady=3)
         self.dual_info = tk.Label(dual_box,
             text="Fluidez: até 24 FPS e 720p por vídeo. Original: sem reduzir resolução.",
             bg="#1d293a", fg="#9ca3af", font=("Segoe UI", 9))
-        self.dual_info.grid(row=6, column=0, columnspan=3, sticky="w", pady=(5, 0))
+        self.dual_info.grid(row=7, column=0, columnspan=3, sticky="w", pady=(5, 0))
         dual_box.columnconfigure(0, weight=1)
 
-        controls = tk.Frame(main, bg="#1d293a", padx=20, pady=17)
-        controls.pack(fill="x", pady=(12, 0))
-        tk.Label(controls, text="CONFIGURAÇÕES", bg="#1d293a", fg="#8ebeff", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
+        controls = tk.Frame(main, bg="#1d293a", padx=18, pady=13, highlightthickness=1,
+                            highlightbackground="#30455e")
+        controls.pack(fill="x", pady=(0, 9))
+        tk.Label(controls, text="03   CONFIGURAÇÕES DE VÍDEO", bg="#1d293a", fg="#8ebeff", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
         tk.Label(controls, text="Quadros por segundo", bg="#1d293a", fg="white").grid(row=1, column=0, sticky="w")
         self.fps_var = tk.StringVar(value="30")
         self.fps_combo = ttk.Combobox(controls, textvariable=self.fps_var, values=["15", "24", "30", "60"],
@@ -1122,7 +1156,7 @@ class App(tk.Tk):
         self.mic_check.grid(row=3, column=0, columnspan=2, sticky="w")
         self.sys_check = ttk.Checkbutton(controls, text="Áudio do computador", variable=self.sys_var, style="Dark.TCheckbutton")
         self.sys_check.grid(row=3, column=2, columnspan=2, sticky="w")
-        tk.Label(controls, text="ESTÚDIO (opcional)", bg="#1d293a", fg="#8ebeff",
+        tk.Label(controls, text="ESTÚDIO  /  ÁUDIO E WEBCAM (OPCIONAL)", bg="#1d293a", fg="#8ebeff",
                  font=("Segoe UI", 10, "bold")).grid(row=4, column=0, columnspan=4, sticky="w", pady=(10, 5))
         self.webcam_var = tk.StringVar(value=CAMERA_OFF)
         self.webcam_combo = ttk.Combobox(controls, textvariable=self.webcam_var, values=[CAMERA_OFF],
@@ -1167,9 +1201,10 @@ class App(tk.Tk):
         tk.Label(controls, textvariable=self.studio_status, bg="#1d293a", fg="#9ca3af",
                  font=("Segoe UI", 9)).grid(row=10, column=0, columnspan=4, sticky="w", pady=(5, 0))
 
-        paths = tk.Frame(main, bg="#1d293a", padx=20, pady=15)
-        paths.pack(fill="x", pady=(12, 0))
-        tk.Label(paths, text="SALVAR GRAVAÇÕES EM", bg="#1d293a", fg="#8ebeff", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 7))
+        paths = tk.Frame(main, bg="#1d293a", padx=18, pady=12, highlightthickness=1,
+                         highlightbackground="#30455e")
+        paths.pack(fill="x", pady=(0, 9))
+        tk.Label(paths, text="04   DESTINO DOS ARQUIVOS", bg="#1d293a", fg="#8ebeff", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(0, 7))
         path_line = tk.Frame(paths, bg="#1d293a")
         path_line.pack(fill="x")
         self.folder_var = tk.StringVar(value=str(Path.home() / "Videos" / "GravadorTela"))
@@ -1180,38 +1215,41 @@ class App(tk.Tk):
                                        relief="flat", cursor="hand2", padx=15, pady=8)
         self.browse_button.pack(side="right")
 
-        action = tk.Frame(main, bg="#111827")
-        action.pack(fill="x", pady=(13, 0))
+        action = tk.Frame(dock, bg="#101d30")
+        action.pack(fill="x", pady=(0, 6))
         self.record_button = tk.Button(action, text="●  INICIAR GRAVAÇÃO", command=self._record_action,
                                        bg="#dc3545", fg="white", activebackground="#bb2939", activeforeground="white",
-                                       relief="flat", cursor="hand2", font=("Segoe UI", 12, "bold"), pady=12)
-        self.record_button.pack(side="left", fill="x", expand=True, padx=(0, 10))
+                                       relief="flat", cursor="hand2", font=("Segoe UI", 11, "bold"), pady=8)
+        self.record_button.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.pause_button = tk.Button(action, text="Ⅱ  PAUSAR", command=self._pause_action,
                                       bg="#475569", fg="white", relief="flat", font=("Segoe UI", 11, "bold"),
-                                      cursor="hand2", padx=18, pady=12, state="disabled")
+                                      cursor="hand2", padx=12, pady=8, state="disabled")
         self.pause_button.pack(side="left")
         self.recover_button = tk.Button(action, text="RECUPERAR VÍDEO", command=self._recover_dialog,
                                        bg="#25607e", fg="white", relief="flat", font=("Segoe UI", 9, "bold"),
-                                       cursor="hand2", padx=10, pady=12)
+                                       cursor="hand2", padx=8, pady=8)
         self.recover_button.pack(side="left", padx=(10, 0))
         self.draw_button = tk.Button(action, text="✎ DESENHAR (F8)",
                                      command=self._manual_draw_action,
                                      bg="#18788c", fg="white", relief="flat",
                                      font=("Segoe UI", 9, "bold"), cursor="hand2",
-                                     padx=8, pady=12, state="disabled")
+                                     padx=7, pady=8, state="disabled")
         self.draw_button.pack(side="left", padx=(10, 0))
 
-        foot = tk.Frame(main, bg="#111827")
-        foot.pack(fill="x", pady=(17, 0))
+        foot = tk.Frame(dock, bg="#101d30")
+        foot.pack(fill="x", pady=(1, 0))
         self.status_var = tk.StringVar(value="Pronto para gravar")
-        tk.Label(foot, textvariable=self.status_var, bg="#111827", fg="#a7b8c9", font=("Segoe UI", 10)).pack(side="left")
-        self.performance_var = tk.StringVar(value="Codificador: aguardando   •   FPS: —   •   Disco: —")
-        tk.Label(main, textvariable=self.performance_var, bg="#111827", fg="#93c5fd",
-                 font=("Consolas", 10)).pack(anchor="w", pady=(8, 0))
         self.elapsed_var = tk.StringVar(value="00:00:00")
-        tk.Label(foot, textvariable=self.elapsed_var, bg="#111827", fg="white", font=("Consolas", 16, "bold")).pack(side="right")
-        tk.Label(main, text="Ctrl+Shift+R/P: gravar/pausar  •  Ctrl+Alt+D ou F8: desenhar  •  U/Y: desfazer/refazer",
-                 bg="#111827", fg="#8391a4", font=("Segoe UI", 9)).pack(anchor="w", pady=(12, 0))
+        tk.Label(foot, textvariable=self.elapsed_var, bg="#101d30", fg="white",
+                 font=("Consolas", 16, "bold")).pack(side="right", padx=(12, 0))
+        # Texto longo de arquivos salvos não pode empurrar o cronômetro para fora da tela.
+        tk.Label(foot, textvariable=self.status_var, bg="#101d30", fg="#a7b8c9",
+                 font=("Segoe UI", 9), width=1, anchor="w").pack(side="left", fill="x", expand=True)
+        self.performance_var = tk.StringVar(value="Codificador: aguardando   •   FPS: —   •   Disco: —")
+        tk.Label(dock, textvariable=self.performance_var, bg="#101d30", fg="#93c5fd",
+                 font=("Consolas", 9)).pack(anchor="w", pady=(5, 0))
+        tk.Label(dock, text="Ctrl+Shift+R/P: gravar/pausar    •    Ctrl+Alt+D ou F8: desenhar    •    U/Y: desfazer/refazer",
+                 bg="#101d30", fg="#8391a4", font=("Segoe UI", 8)).pack(anchor="w", pady=(5, 0))
 
     def _refresh_cameras(self) -> None:
         """Busca dispositivos sem bloquear o Tkinter. Não abre a webcam."""
@@ -1913,6 +1951,14 @@ class App(tk.Tk):
         self.after(120, self._poll)
 
     def _tick(self) -> None:
+        state_label, state_color = {
+            "idle": ("●  PRONTO", "#61d8a2"),
+            "recording": ("●  GRAVANDO", "#ff7080"),
+            "paused": ("Ⅱ  PAUSADO", "#ffd166"),
+        }.get(self.state, ("◌  PROCESSANDO", "#8ecfff"))
+        if self.header_state_var.get() != state_label:
+            self.header_state_var.set(state_label)
+            self.header_state_label.configure(fg=state_color)
         if self.state == "recording" and self.studio_overlay is not None:
             actual = bool(self.studio_overlay.drawing)
             if actual != self.studio_draw_mode:
