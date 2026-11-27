@@ -103,7 +103,8 @@ def synthetic_dual_probe(ffmpeg: str, codec: str, options: tuple[str, ...],
 
 def dual_diagnostic(tempdir: Path, output: Path, config: DualConfig,
                     codec: str, area_a, area_b, preflight: dict | None, warnings: list[str],
-                    segment_metrics: list[dict] | None = None) -> Path:
+                    segment_metrics: list[dict] | None = None, *,
+                    source_b: str = 'desktop_region') -> Path:
     """Export only capture metrics. Never export window names, raw logs or user paths."""
     samples = []
     src = tempdir / 'desempenho_amostras.csv'
@@ -116,13 +117,19 @@ def dual_diagnostic(tempdir: Path, output: Path, config: DualConfig,
                         samples.append(speed)
                 except (TypeError, ValueError):
                     continue
+    if source_b not in ('desktop_region', 'usb_camera'):
+        raise ValueError('Tipo de fonte B inválido')
+    if source_b == 'desktop_region' and area_b is None:
+        raise ValueError('Área B obrigatória')
     payload = {
         'formato': 'video360-dual-diagnostic-1',
         'perfil': config.name,
         'fps_configurado': config.capture_fps,
         'resolucao_maxima_saida': [config.max_width, config.max_height] if config.scaled else 'original',
         'resolucao_entrada_a': [area_a.width,area_a.height],
-        'resolucao_entrada_b': [area_b.width,area_b.height],
+        'resolucao_entrada_b': ([area_b.width,area_b.height] if source_b == 'desktop_region' else None),
+        'fonte_b': source_b,
+        'resolucao_nativa_camera_usb': 'não verificada' if source_b == 'usb_camera' else None,
         'codificador': codec,
         'benchmark_sintetico': preflight or {},
         'amostras_de_velocidade': len(samples),

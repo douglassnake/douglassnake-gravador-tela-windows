@@ -1,12 +1,12 @@
 @echo off
 setlocal EnableExtensions
-title Gravador de Tela Windows v2.6 RC1 - gerar executavel
+title Gravador de Tela Windows v2.7 RC3 - gerar executavel
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0INSTALAR.ps1" -Acao GerarEXE
 if errorlevel 1 (
   echo Falha na compilacao. Execute DIAGNOSTICO.bat.
 ) else (
   echo.
-  echo Executavel gerado em: "%LOCALAPPDATA%\GravadorTelaWin\dist\GravadorTelaWin_v2_5_ESTUDIO_RC2.exe"
+  echo Executavel gerado em: "%LOCALAPPDATA%\GravadorTelaWin\dist\GravadorTelaWin_v2_7_USB_RC3.exe"
   echo Este executavel nao e assinado digitalmente.
 )
 pause
