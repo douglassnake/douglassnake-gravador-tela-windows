@@ -652,6 +652,7 @@ class ScrcpyDualEngine(RecordingEngine):
         try:
             process = subprocess.Popen(
                 command, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                cwd=str(self.scrcpy_exe.parent),  # DLLs, scrcpy-server and adb.exe from selected distribution
                 creationflags=(getattr(subprocess, 'CREATE_NO_WINDOW', 0)
                                if sys.platform == 'win32' else 0))
             self.scrcpy_proc, self.scrcpy_log, self.scrcpy_camera_file = process, log, camera_file
